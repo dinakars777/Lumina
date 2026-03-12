@@ -4,8 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="lumina-mp-url" content="https://lumina-ascendant-multiplayer.onrender.com">
     <title>Lumina: Ascendant Edition</title>
-    <link rel="stylesheet" href="style.css?v=ascendant_20260212a">
+    <link rel="stylesheet" href="style.css?v=ascendant_20260302r">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
@@ -161,11 +162,27 @@
             <span>Shift Sprint</span>
             <span>Space Dash</span>
             <span>F Pulse</span>
+            <span>V Weather</span>
             <span>R Trap</span>
             <span>C Craft</span>
             <span>X Shoot</span>
             <span>Q Flare</span>
             <span>E Interact</span>
+            <span>M Multiplayer Soon</span>
+        </div>
+
+        <div id="touch-controls" class="touch-controls hidden">
+            <div id="touch-move-pad" class="touch-move-pad">
+                <div id="touch-stick" class="touch-stick"></div>
+            </div>
+            <div class="touch-actions">
+                <button id="touch-sprint-btn" class="touch-btn touch-btn-wide" aria-label="Sprint">SPRINT</button>
+                <button id="touch-dash-btn" class="touch-btn" aria-label="Dash">DASH</button>
+                <button id="touch-pulse-btn" class="touch-btn" aria-label="Pulse">PULSE</button>
+                <button id="touch-interact-btn" class="touch-btn touch-btn-wide" aria-label="Interact">USE</button>
+                <button id="touch-weather-btn" class="touch-btn touch-btn-wide" aria-label="Weather">WEATHER</button>
+                <button id="touch-shoot-btn" class="touch-btn touch-btn-wide" aria-label="Shoot">SHOOT</button>
+            </div>
         </div>
 
         <div id="event-feed" class="event-feed"></div>
@@ -243,6 +260,12 @@
                 <div class="actions">
                     <button id="start-btn" class="primary-btn glow-btn">
                         <i class="fa-solid fa-play"></i> ENTER FOREST
+                    </button>
+                    <button id="rewarded-embers-btn" class="secondary-btn" title="Watch a rewarded ad for bonus embers">
+                        <i class="fa-solid fa-circle-play"></i> WATCH AD +30 EMBERS
+                    </button>
+                    <button id="open-multiplayer-btn" class="secondary-btn" disabled title="Multiplayer coming soon">
+                        <i class="fa-solid fa-user-group"></i> MULTIPLAYER (COMING SOON)
                     </button>
                     <button id="open-shop-btn" class="secondary-btn">
                         <i class="fa-solid fa-store"></i> STORE
@@ -375,6 +398,17 @@
             </div>
         </div>
 
+        <div id="crafting-screen" class="screen hidden">
+            <div class="glass-panel crafting-panel">
+                <div class="settings-header">
+                    <h2>CRAFTING TABLE</h2>
+                    <button id="close-crafting-btn" class="close-btn"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <p id="crafting-subtitle">Wood 0 • Shards 0 • Embers 0</p>
+                <div id="crafting-options" class="crafting-options"></div>
+            </div>
+        </div>
+
         <div id="settings-screen" class="screen hidden">
             <div class="glass-panel settings-panel">
                 <div class="settings-header">
@@ -470,12 +504,77 @@
                         <i class="fa-solid fa-fire-flame-curved"></i> +<span id="earned-embers">0</span>
                     </div>
                 </div>
+                <button id="gameover-rewarded-btn" class="secondary-btn">
+                    <i class="fa-solid fa-circle-play"></i> WATCH AD: +50% EMBERS
+                </button>
                 <button id="restart-btn" class="primary-btn">Rekindle</button>
+            </div>
+        </div>
+
+        <div id="multiplayer-screen" class="screen hidden">
+            <div class="glass-panel multiplayer-panel">
+                <div class="settings-header">
+                    <h2>MULTIPLAYER LOBBY</h2>
+                    <button id="close-multiplayer-btn" class="close-btn"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+
+                <p id="multiplayer-status" class="multiplayer-status">Multiplayer is temporarily disabled. Coming soon.</p>
+
+                <div class="multiplayer-fields">
+                    <label class="setting-row" for="mp-name-input">
+                        <span class="setting-label">Callsign</span>
+                        <div class="setting-control">
+                            <input id="mp-name-input" class="mp-input" type="text" maxlength="20" placeholder="Ranger" />
+                        </div>
+                    </label>
+                    <label class="setting-row" for="mp-room-input">
+                        <span class="setting-label">Room Code</span>
+                        <div class="setting-control">
+                            <input id="mp-room-input" class="mp-input room-code" type="text" maxlength="6" placeholder="ABC123" />
+                        </div>
+                    </label>
+                </div>
+
+                <div class="multiplayer-actions">
+                    <button id="mp-create-btn" class="primary-btn">
+                        <i class="fa-solid fa-plus"></i> CREATE ROOM
+                    </button>
+                    <button id="mp-join-btn" class="secondary-btn">
+                        <i class="fa-solid fa-door-open"></i> JOIN ROOM
+                    </button>
+                    <button id="mp-leave-btn" class="secondary-btn">
+                        <i class="fa-solid fa-right-from-bracket"></i> LEAVE ROOM
+                    </button>
+                </div>
+
+                <div class="multiplayer-room-strip">
+                    <span class="objective-label">ACTIVE ROOM</span>
+                    <span id="mp-room-display" class="room-display">-</span>
+                    <button id="mp-copy-code-btn" class="secondary-btn">
+                        <i class="fa-solid fa-copy"></i> COPY
+                    </button>
+                </div>
+
+                <div class="multiplayer-launch">
+                    <button id="mp-start-btn" class="primary-btn" disabled>
+                        <i class="fa-solid fa-rocket"></i> START CO-OP (HOST)
+                    </button>
+                    <p id="mp-start-hint" class="mp-start-hint">Create or join a room first.</p>
+                </div>
+
+                <div class="multiplayer-roster-wrap">
+                    <span class="objective-label">PLAYERS</span>
+                    <div id="mp-roster" class="multiplayer-roster"></div>
+                </div>
+
+                <p class="guide-footnote">Multiplayer is temporarily disabled while solo mode is being polished.</p>
             </div>
         </div>
     </div>
 
-    <script src="game.js?v=ascendant_20260212a" defer></script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" crossorigin="anonymous"></script>
+    <script src="ads-adapter.js?v=ascendant_20260302r" defer></script>
+    <script src="game.js?v=ascendant_20260302r" defer></script>
 </body>
 
 </html>

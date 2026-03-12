@@ -105,9 +105,47 @@ const CONFIG = {
     DARKNESS_DAMAGE: 11,
     ENEMY_DAMAGE: 17,
     PLAYER_DAMAGE_COOLDOWN: 0.45,
+    CHEST_COUNT: 22,
+    DEPLOY_HUB_X: 0,
+    DEPLOY_HUB_Z: -150,
+    DEPLOY_PORTAL_RADIUS: 4.8,
+    ALLY_SENTINEL_COUNT: 2,
+    WEATHER_CONTROL_COOLDOWN: 24,
+    ASSIST_MAX: 0.3,
+    TOUCH_DEADZONE: 0.12,
+    MULTIPLAYER_SEND_INTERVAL: 0.075,
+    MULTIPLAYER_IDLE_SEND_INTERVAL: 0.16,
+    MULTIPLAYER_ENEMY_INTERP: 12,
+    MULTIPLAYER_AREA_EFFECT_INTERP: 10,
+    MULTIPLAYER_REMOTE_POS_INTERP: 13,
+    MULTIPLAYER_REMOTE_ROT_INTERP: 15,
+    MULTIPLAYER_REMOTE_EXTRAP_MS: 180,
+    MULTIPLAYER_LOCAL_CORRECTION_NEAR: 5.2,
+    MULTIPLAYER_LOCAL_CORRECTION_FAR: 8.2,
+    MULTIPLAYER_LOCAL_SNAP_DISTANCE_BASE: 22,
+    MULTIPLAYER_LOCAL_SNAP_DISTANCE_PING_SCALE: 0.08,
+    MULTIPLAYER_REMOTE_TIMEOUT: 10,
+    MULTIPLAYER_NAME_KEY: 'lumina_mp_name',
+    MULTIPLAYER_CLIENT_ID_KEY: 'lumina_mp_client_id',
+    TELEMETRY_EVENT_LIMIT: 90,
+    TELEMETRY_HISTORY_LIMIT: 20,
     SAVE_KEY: 'lumina_save_ascendant',
     LEGACY_SAVE_KEY: 'lumina_save'
 };
+const MULTIPLAYER_ENABLED = false;
+const MULTIPLAYER_DISABLED_MESSAGE = 'Multiplayer is temporarily disabled. Coming soon.';
+let lastMultiplayerDisabledNoticeAt = 0;
+const MONETIZATION = Object.freeze({
+    REWARDED_DEFAULT_ENABLED: false,
+    REWARDED_DAILY_CAP: 6,
+    START_BONUS_EMBERS: 30,
+    START_BONUS_DAILY_CAP: 2,
+    GAME_OVER_BONUS_MULT: 0.5,
+    SHARD_REROLL_COST: 4,
+    REWARDED_COOLDOWN_MS: 900
+});
+const PLATFORM_SDK_INIT_TIMEOUT_MS = 1600;
+const CRAZYGAMES_SDK_URL = 'https://sdk.crazygames.com/crazygames-sdk-v3.js';
 
 const DIFFICULTY = {
     easy: {
@@ -257,6 +295,44 @@ const PERK_POOL = [
     { id: 'guardian_shell', name: 'Guardian Shell', desc: 'Take less damage from darkness and enemies.' },
     { id: 'crystal_magnet', name: 'Crystal Magnet', desc: 'Gain more shards from harvest and kills.' },
     { id: 'trailblazer', name: 'Trailblazer', desc: 'Move faster and contract rewards improve.' }
+];
+
+const CRAFTING_RECIPES = [
+    {
+        id: 'map_kit',
+        name: 'Survey Map',
+        desc: 'Reveals chest signatures and doubles resource pings on radar.',
+        costs: { wood: 8, shards: 3, embers: 0 }
+    },
+    {
+        id: 'sundial',
+        name: 'Sundial',
+        desc: 'Extends each gather phase with additional daylight.',
+        costs: { wood: 10, shards: 2, embers: 25 }
+    },
+    {
+        id: 'radar_array',
+        name: 'Radar Array',
+        desc: 'Expands radar range and enemy tracking precision.',
+        costs: { wood: 6, shards: 7, embers: 20 }
+    },
+    {
+        id: 'lightning_rods',
+        name: 'Lightning Rods',
+        desc: 'Stabilizes storms and reduces weather-driven fire drain.',
+        costs: { wood: 12, shards: 5, embers: 35 }
+    },
+    {
+        id: 'weather_controller',
+        name: 'Weather Controller',
+        desc: 'Unlocks weather override pulses (V) to calm rain and wind.',
+        costs: { wood: 14, shards: 8, embers: 50 }
+    }
+];
+
+const DEPLOY_PORTALS = [
+    { id: 'solo', label: 'Solo Rift', desc: 'Deploy alone into the forest.' },
+    { id: 'allies', label: 'Allies Rift', desc: 'Multiplayer coming soon.' }
 ];
 
 const RELIC_CATALOG = {
@@ -492,6 +568,24 @@ const DEFAULT_SETTINGS = Object.freeze({
     showControlsHud: true
 });
 
+const DEFAULT_PROFILE = Object.freeze({
+    totalRuns: 0,
+    extracts: 0,
+    defeats: 0,
+    lossStreak: 0,
+    bestDay: 0,
+    recentDays: []
+});
+
+const BASE_RUN_ASSIST = Object.freeze({
+    enemySpawnMult: 1,
+    fireDecayMult: 1,
+    emberGainMult: 1,
+    startWoodBonus: 0,
+    startShardBonus: 0,
+    dropBonus: 0
+});
+
 const world = {
     renderer: null,
     scene: null,
@@ -508,7 +602,11 @@ const TMP = {
     camRight: new THREE.Vector3(),
     moveDir: new THREE.Vector3(),
     moveTarget: new THREE.Vector3(),
-    pulsePush: new THREE.Vector3()
+    pulsePush: new THREE.Vector3(),
+    authPredPos: new THREE.Vector3(),
+    authCorrection: new THREE.Vector3(),
+    remotePredPos: new THREE.Vector3(),
+    authEnemyPredPos: new THREE.Vector3()
 };
 
 const state = {
@@ -527,6 +625,7 @@ const state = {
     selectedDifficulty: 'normal',
     selectedMode: 'standard',
     activeMode: 'standard',
+    partyMode: 'solo',
     activeChallengeId: '',
     equippedSkin: 'standard',
     inventory: {
@@ -535,9 +634,19 @@ const state = {
         relics: []
     },
     challengeHistory: {},
+    profile: { ...DEFAULT_PROFILE },
     guideSeen: false,
+    gadgets: {
+        map_kit: false,
+        sundial: false,
+        radar_array: false,
+        lightning_rods: false,
+        weather_controller: false
+    },
     settings: { ...DEFAULT_SETTINGS },
     settingsResumeOnClose: false,
+    craftingResumeOnClose: false,
+    runAssist: { ...BASE_RUN_ASSIST },
     daily: buildDailyChallenge(getTodayDateId()),
     rng: {
         seeded: false,
@@ -574,6 +683,8 @@ const state = {
     pulseCooldownMax: CONFIG.PULSE_BASE_COOLDOWN,
     boltCooldown: 0,
     boltCooldownMax: CONFIG.BOLT_FIRE_COOLDOWN,
+    weatherControlCooldown: 0,
+    weatherControlCooldownMax: CONFIG.WEATHER_CONTROL_COOLDOWN,
     playerHitCooldown: 0,
     ghostProximity: 0,
     playerFacing: 0,
@@ -609,6 +720,72 @@ const state = {
     },
     currentContract: null,
     score: 0,
+    deployment: {
+        awaitingChoice: false
+    },
+    ads: {
+        busy: false,
+        lastRewardedAt: 0,
+        dailyDate: getTodayDateId(),
+        dailyViews: 0,
+        startBonusClaims: 0,
+        perkRerollUsed: false,
+        gameOverBasePayout: 0,
+        gameOverBonus: 0,
+        gameOverRewardClaimed: false
+    },
+    platform: {
+        provider: 'web',
+        crazygames: {
+            ready: false,
+            initInFlight: false,
+            loadingActive: false,
+            gameplayActive: false
+        }
+    },
+    multiplayer: {
+        supported: false,
+        socket: null,
+        connected: false,
+        connecting: false,
+        inRoom: false,
+        roomCode: '',
+        lastRoomCode: '',
+        hostId: '',
+        playerId: '',
+        clientId: '',
+        serverUrl: '',
+        inputSeq: 0,
+        pingMs: 0,
+        players: [],
+        status: 'Offline',
+        sendAccumulator: 0,
+        name: '',
+        authoritative: {
+            active: false,
+            seed: '',
+            localTargetPos: new THREE.Vector3(),
+            localTargetRot: 0,
+            actionQueue: {
+                interact: 0,
+                pulse: 0,
+                shoot: 0,
+                dash: 0,
+                weather: 0,
+                trap: 0,
+                flare: 0,
+                craft: 0
+            },
+            meshMaps: {
+                wood: new Map(),
+                shards: new Map(),
+                chests: new Map(),
+                enemies: new Map(),
+                traps: new Map(),
+                flares: new Map()
+            }
+        }
+    },
     weapon: {
         crafted: false,
         ammo: 0
@@ -619,6 +796,18 @@ const state = {
     playerVelocity: new THREE.Vector3(),
     cameraTarget: new THREE.Vector3(0, 2, 0),
     keys: {},
+    touchInput: {
+        enabled: false,
+        active: false,
+        pointerId: -1,
+        moveX: 0,
+        moveY: 0,
+        sprint: false
+    },
+    telemetry: {
+        history: [],
+        session: null
+    },
     runtime: {
         dayDuration: DIFFICULTY.normal.dayDuration,
         nightDuration: DIFFICULTY.normal.nightDuration,
@@ -662,6 +851,11 @@ const state = {
             wood: [],
             shards: []
         },
+        chests: [],
+        craftingTable: null,
+        deployHub: null,
+        alliedSentinels: [],
+        remotePlayers: {},
         beacons: [],
         enemies: [],
         activeFlares: [],
@@ -700,7 +894,13 @@ const ui = {
     interactionPrompt: null,
     interactionText: null,
     startBtn: null,
+    rewardedEmbersBtn: null,
     restartBtn: null,
+    gameOverRewardedBtn: null,
+    gameOverEarned: null,
+    gameOverTitle: null,
+    gameOverMessage: null,
+    openMultiplayerBtn: null,
     openShopBtn: null,
     closeShopBtn: null,
     quickShopBtn: null,
@@ -735,7 +935,33 @@ const ui = {
     settingScreenShakeValue: null,
     settingSfxEnabled: null,
     settingReduceFlash: null,
-    settingShowControls: null
+    settingShowControls: null,
+    craftingScreen: null,
+    craftingOptions: null,
+    craftingSubtitle: null,
+    closeCraftingBtn: null,
+    multiplayerScreen: null,
+    closeMultiplayerBtn: null,
+    multiplayerStatus: null,
+    mpNameInput: null,
+    mpRoomInput: null,
+    mpCreateBtn: null,
+    mpJoinBtn: null,
+    mpLeaveBtn: null,
+    mpStartBtn: null,
+    mpCopyCodeBtn: null,
+    mpRoomDisplay: null,
+    mpStartHint: null,
+    mpRoster: null,
+    touchControls: null,
+    touchMovePad: null,
+    touchStick: null,
+    touchSprintBtn: null,
+    touchDashBtn: null,
+    touchPulseBtn: null,
+    touchWeatherBtn: null,
+    touchInteractBtn: null,
+    touchShootBtn: null
 };
 
 const AudioManager = {
@@ -855,6 +1081,107 @@ function normalizeSettings(raw) {
     };
 }
 
+function normalizeProfile(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const recentRaw = Array.isArray(source.recentDays) ? source.recentDays : [];
+
+    return {
+        totalRuns: Math.max(0, Math.floor(Number(source.totalRuns) || 0)),
+        extracts: Math.max(0, Math.floor(Number(source.extracts) || 0)),
+        defeats: Math.max(0, Math.floor(Number(source.defeats) || 0)),
+        lossStreak: Math.max(0, Math.floor(Number(source.lossStreak) || 0)),
+        bestDay: Math.max(0, Math.floor(Number(source.bestDay) || 0)),
+        recentDays: recentRaw
+            .map((v) => Math.max(0, Math.floor(Number(v) || 0)))
+            .filter((v) => Number.isFinite(v))
+            .slice(-8)
+    };
+}
+
+function getRecentAverageDay(profile = state.profile) {
+    const days = Array.isArray(profile.recentDays) ? profile.recentDays : [];
+    if (days.length === 0) return 0;
+    const sum = days.reduce((acc, v) => acc + v, 0);
+    return sum / days.length;
+}
+
+function computeRunAssist() {
+    const profile = normalizeProfile(state.profile);
+    const lossPressure = clamp((profile.lossStreak - 1) * 0.09, 0, CONFIG.ASSIST_MAX);
+    const avgRecent = getRecentAverageDay(profile);
+    const veteranPressure = clamp((avgRecent - 5.5) * 0.03, 0, 0.16);
+    let assist = clamp(lossPressure - veteranPressure * 0.55, 0, CONFIG.ASSIST_MAX);
+
+    if (state.selectedDifficulty === 'easy') assist = clamp(assist + 0.04, 0, CONFIG.ASSIST_MAX);
+    if (state.activeMode === 'daily') assist *= 0.62;
+
+    const veteranBoost = clamp(veteranPressure + Math.max(0, state.pushStreak - 1) * 0.02, 0, 0.22);
+
+    return {
+        enemySpawnMult: clamp(1 - assist * 0.55 + veteranBoost * 0.2, 0.72, 1.22),
+        fireDecayMult: clamp(1 - assist * 0.48 + veteranBoost * 0.16, 0.7, 1.18),
+        emberGainMult: clamp(1 + assist * 0.4 + veteranBoost * 0.45, 0.9, 1.35),
+        startWoodBonus: Math.min(3, Math.floor(assist * 8)),
+        startShardBonus: Math.min(2, Math.floor(assist * 5)),
+        dropBonus: clamp(assist * 0.16, 0, 0.06)
+    };
+}
+
+function createTelemetrySession() {
+    return {
+        id: `${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`,
+        startedAt: Date.now(),
+        startPerf: performance.now(),
+        mode: state.activeMode,
+        party: state.partyMode,
+        difficulty: state.selectedDifficulty,
+        events: []
+    };
+}
+
+function trackTelemetry(type, payload = {}) {
+    const session = state.telemetry.session;
+    if (!session) return;
+
+    const event = {
+        type,
+        t: Number(((performance.now() - session.startPerf) / 1000).toFixed(2)),
+        ...payload
+    };
+
+    session.events.push(event);
+    if (session.events.length > CONFIG.TELEMETRY_EVENT_LIMIT) {
+        session.events.shift();
+    }
+}
+
+function finalizeTelemetrySession(extra = {}) {
+    const session = state.telemetry.session;
+    if (!session) return;
+
+    const duration = Math.max(0, Math.round((performance.now() - session.startPerf) / 1000));
+    const summary = {
+        id: session.id,
+        startedAt: session.startedAt,
+        duration,
+        mode: session.mode,
+        party: session.party,
+        difficulty: session.difficulty,
+        day: state.day,
+        score: Math.floor(state.score),
+        result: extra.result || 'unknown',
+        reason: extra.reason || '',
+        events: session.events.slice(-20)
+    };
+
+    state.telemetry.history.unshift(summary);
+    if (state.telemetry.history.length > CONFIG.TELEMETRY_HISTORY_LIMIT) {
+        state.telemetry.history.length = CONFIG.TELEMETRY_HISTORY_LIMIT;
+    }
+
+    state.telemetry.session = null;
+}
+
 function setRunSeed(seed) {
     const s = (Number(seed) >>> 0) || 1;
     state.rng.seeded = true;
@@ -896,9 +1223,1240 @@ function dist2(ax, az, bx, bz) {
     return Math.hypot(dx, dz);
 }
 
+function hasGadget(id) {
+    return !!(state.gadgets && state.gadgets[id]);
+}
+
+function getRadarRange() {
+    let range = CONFIG.RADAR_RANGE;
+    if (hasGadget('radar_array')) range += 55;
+    if (hasUpgrade('hunter_map')) range += 16;
+    return range;
+}
+
+function getRecipeById(id) {
+    return CRAFTING_RECIPES.find((entry) => entry.id === id) || null;
+}
+
+function hasRecipeResources(recipe) {
+    if (!recipe) return false;
+    const costs = recipe.costs || {};
+    return state.wood >= (costs.wood || 0)
+        && state.shards >= (costs.shards || 0)
+        && state.embers >= (costs.embers || 0);
+}
+
+function sanitizePlayerName(input) {
+    const cleaned = String(input || '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) return 'Ranger';
+    return cleaned.slice(0, 20);
+}
+
+function getStoredMultiplayerName() {
+    try {
+        const cached = localStorage.getItem(CONFIG.MULTIPLAYER_NAME_KEY);
+        if (cached) return sanitizePlayerName(cached);
+    } catch (err) {
+        console.warn('Unable to read multiplayer name cache:', err);
+    }
+    return `Ranger${Math.floor(rand(100, 999))}`;
+}
+
+function saveStoredMultiplayerName(name) {
+    try {
+        localStorage.setItem(CONFIG.MULTIPLAYER_NAME_KEY, sanitizePlayerName(name));
+    } catch (err) {
+        console.warn('Unable to save multiplayer name cache:', err);
+    }
+}
+
+function generateMultiplayerClientId() {
+    const randA = Math.floor(Math.random() * 1e9).toString(36);
+    const randB = Math.floor(Math.random() * 1e9).toString(36);
+    const ts = Date.now().toString(36);
+    return `c_${ts}_${randA}${randB}`.slice(0, 48);
+}
+
+function getStoredMultiplayerClientId() {
+    try {
+        const cached = localStorage.getItem(CONFIG.MULTIPLAYER_CLIENT_ID_KEY);
+        if (cached && /^[a-zA-Z0-9_-]{8,48}$/.test(cached)) {
+            return cached;
+        }
+    } catch (err) {
+        console.warn('Unable to read multiplayer client id cache:', err);
+    }
+    const created = generateMultiplayerClientId();
+    try {
+        localStorage.setItem(CONFIG.MULTIPLAYER_CLIENT_ID_KEY, created);
+    } catch (err) {
+        console.warn('Unable to persist multiplayer client id cache:', err);
+    }
+    return created;
+}
+
+function sanitizeMultiplayerServerUrl(raw) {
+    if (typeof window === 'undefined') return '';
+    const value = String(raw || '').trim();
+    if (!value) return '';
+
+    const lowered = value.toLowerCase();
+    if (lowered === 'same-origin' || lowered === 'origin' || lowered === 'same_origin') {
+        return '';
+    }
+
+    let candidate = value;
+    if (candidate.startsWith('//')) {
+        candidate = `${window.location.protocol}${candidate}`;
+    } else if (!/^https?:\/\//i.test(candidate) && /^[a-z0-9.-]+(?::\d+)?$/i.test(candidate)) {
+        const useHttp = /^localhost(?::\d+)?$/i.test(candidate) || /^127\.0\.0\.1(?::\d+)?$/i.test(candidate);
+        candidate = `${useHttp ? 'http' : 'https'}://${candidate}`;
+    }
+
+    try {
+        const parsed = new URL(candidate, window.location.origin);
+        if (!/^https?:$/i.test(parsed.protocol)) return '';
+        return parsed.origin;
+    } catch (err) {
+        console.warn('Ignoring invalid multiplayer server URL:', err);
+        return '';
+    }
+}
+
+function getConfiguredMultiplayerServerUrl() {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get('mp') || params.get('multiplayer') || '';
+    const fromGlobal = typeof window.LUMINA_MULTIPLAYER_URL === 'string' ? window.LUMINA_MULTIPLAYER_URL : '';
+    const metaNode = document.querySelector('meta[name="lumina-mp-url"]');
+    const fromMeta = metaNode ? metaNode.getAttribute('content') || '' : '';
+    return sanitizeMultiplayerServerUrl(fromQuery || fromGlobal || fromMeta);
+}
+
+function setMultiplayerStatus(message, kind = '') {
+    state.multiplayer.status = String(message || '');
+    if (!ui.multiplayerStatus) return;
+    ui.multiplayerStatus.textContent = state.multiplayer.status || 'Idle';
+    ui.multiplayerStatus.classList.remove('warn', 'danger');
+    if (kind === 'warn' || kind === 'danger') {
+        ui.multiplayerStatus.classList.add(kind);
+    }
+}
+
+function getCrazyGamesSdk() {
+    if (typeof window === 'undefined') return null;
+    const sdkRoot = window.CrazyGames && window.CrazyGames.SDK;
+    return sdkRoot || null;
+}
+
+function shouldAttemptCrazyGamesSdk() {
+    if (typeof window === 'undefined') return false;
+    if (window.CrazyGames && window.CrazyGames.SDK) return true;
+    const host = String(window.location.hostname || '').toLowerCase();
+    if (host.endsWith('.crazygames.com') || host === 'crazygames.com') return true;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('cg_sdk') === '1';
+    } catch (_err) {
+        return false;
+    }
+}
+
+function loadCrazyGamesSdkScript() {
+    if (typeof document === 'undefined') return Promise.resolve(false);
+    if (getCrazyGamesSdk()) return Promise.resolve(true);
+
+    const existing = document.querySelector(`script[src="${CRAZYGAMES_SDK_URL}"]`);
+    if (existing) {
+        return new Promise((resolve) => {
+            const done = () => resolve(!!getCrazyGamesSdk());
+            existing.addEventListener('load', done, { once: true });
+            existing.addEventListener('error', () => resolve(false), { once: true });
+            setTimeout(done, PLATFORM_SDK_INIT_TIMEOUT_MS);
+        });
+    }
+
+    return new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = CRAZYGAMES_SDK_URL;
+        script.async = true;
+        script.onload = () => resolve(!!getCrazyGamesSdk());
+        script.onerror = () => resolve(false);
+        document.head.appendChild(script);
+    });
+}
+
+async function initPlatformSdk() {
+    if (state.platform.crazygames.ready || state.platform.crazygames.initInFlight) return;
+    if (!shouldAttemptCrazyGamesSdk()) return;
+
+    state.platform.crazygames.initInFlight = true;
+    try {
+        if (!getCrazyGamesSdk()) {
+            const loaded = await loadCrazyGamesSdkScript();
+            if (!loaded) throw new Error('CrazyGames SDK script unavailable');
+        }
+        const sdk = getCrazyGamesSdk();
+        if (!sdk) throw new Error('CrazyGames SDK missing after load');
+
+        if (typeof sdk.init === 'function') {
+            const initPromise = Promise.resolve().then(() => sdk.init());
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('CrazyGames SDK init timeout')), PLATFORM_SDK_INIT_TIMEOUT_MS);
+            });
+            await Promise.race([initPromise, timeoutPromise]);
+        }
+        state.platform.crazygames.ready = true;
+        state.platform.provider = 'crazygames';
+    } catch (err) {
+        console.warn('CrazyGames SDK init failed:', err);
+        state.platform.crazygames.ready = false;
+        state.platform.provider = 'web';
+    } finally {
+        state.platform.crazygames.initInFlight = false;
+    }
+}
+
+function notifyPlatformLoadingStart() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || state.platform.crazygames.loadingActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.loadingStart !== 'function') return;
+
+    try {
+        gameModule.loadingStart();
+        state.platform.crazygames.loadingActive = true;
+    } catch (err) {
+        console.warn('CrazyGames loadingStart failed:', err);
+    }
+}
+
+function notifyPlatformLoadingStop() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || !state.platform.crazygames.loadingActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.loadingStop !== 'function') return;
+
+    try {
+        gameModule.loadingStop();
+    } catch (err) {
+        console.warn('CrazyGames loadingStop failed:', err);
+    } finally {
+        state.platform.crazygames.loadingActive = false;
+    }
+}
+
+function notifyPlatformGameplayStart() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || state.platform.crazygames.gameplayActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.gameplayStart !== 'function') return;
+
+    try {
+        gameModule.gameplayStart();
+        state.platform.crazygames.gameplayActive = true;
+    } catch (err) {
+        console.warn('CrazyGames gameplayStart failed:', err);
+    }
+}
+
+function notifyPlatformGameplayStop() {
+    const sdk = getCrazyGamesSdk();
+    if (!sdk || !state.platform.crazygames.ready || !state.platform.crazygames.gameplayActive) return;
+    const gameModule = sdk.game;
+    if (!gameModule || typeof gameModule.gameplayStop !== 'function') return;
+
+    try {
+        gameModule.gameplayStop();
+    } catch (err) {
+        console.warn('CrazyGames gameplayStop failed:', err);
+    } finally {
+        state.platform.crazygames.gameplayActive = false;
+    }
+}
+
+function isRewardedAdsEnabled() {
+    if (typeof window === 'undefined') return MONETIZATION.REWARDED_DEFAULT_ENABLED;
+    if (window.LUMINA_ADS_FORCE_OFF === true) return false;
+    if (window.LUMINA_ADS_FORCE_ON === true) return true;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const adsFlag = params.get('ads');
+        if (adsFlag === '0') return false;
+        if (adsFlag === '1') return true;
+    } catch (_err) {
+        // Ignore URL parse errors and fall back to environment defaults.
+    }
+    return shouldAttemptCrazyGamesSdk() || MONETIZATION.REWARDED_DEFAULT_ENABLED;
+}
+
+function isRewardedAdsTestMode() {
+    if (typeof window === 'undefined') return false;
+    if (window.LUMINA_ADS_TEST === true) return true;
+    try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('ads_test') === '1';
+    } catch (_err) {
+        return false;
+    }
+}
+
+function getRewardedBridge() {
+    if (typeof window === 'undefined') return null;
+    const bridge = window.LUMINA_ADS;
+    if (!bridge || typeof bridge.showRewarded !== 'function') return null;
+    return bridge;
+}
+
+function isRewardedProviderAvailable() {
+    if (isRewardedAdsTestMode()) return true;
+    const bridge = getRewardedBridge();
+    if (!bridge) return false;
+    if (typeof bridge.isAvailable === 'function') {
+        try {
+            return !!bridge.isAvailable();
+        } catch (_err) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function ensureRewardedDailyState() {
+    const today = getTodayDateId();
+    if (state.ads.dailyDate === today) return;
+    state.ads.dailyDate = today;
+    state.ads.dailyViews = 0;
+    state.ads.startBonusClaims = 0;
+    state.ads.perkRerollUsed = false;
+}
+
+function canRequestRewardedAd(placement) {
+    if (!isRewardedAdsEnabled()) return false;
+    if (!isRewardedProviderAvailable()) return false;
+    ensureRewardedDailyState();
+    if (state.ads.busy) return false;
+    if (Date.now() - state.ads.lastRewardedAt < MONETIZATION.REWARDED_COOLDOWN_MS) return false;
+    if (state.ads.dailyViews >= MONETIZATION.REWARDED_DAILY_CAP) return false;
+    if (placement === 'start_bonus' && state.ads.startBonusClaims >= MONETIZATION.START_BONUS_DAILY_CAP) return false;
+    if (placement === 'perk_reroll' && state.ads.perkRerollUsed) return false;
+    if (placement === 'game_over_bonus' && state.ads.gameOverRewardClaimed) return false;
+    return true;
+}
+
+async function requestRewardedAd(placement, opts = {}) {
+    if (!canRequestRewardedAd(placement)) {
+        if (!isRewardedProviderAvailable()) {
+            pushFeed('Rewarded provider not configured yet.', 'warn');
+        }
+        if (opts.warnOnBlock) {
+            pushFeed(opts.warnOnBlock, 'warn');
+        }
+        updateRewardedOfferUI();
+        return false;
+    }
+
+    state.ads.busy = true;
+    updateRewardedOfferUI();
+    trackTelemetry('rewarded_start', { placement });
+    if (opts.startFeed) pushFeed(opts.startFeed, 'info');
+
+    let granted = false;
+    try {
+        const bridge = getRewardedBridge();
+
+        if (bridge) {
+            const result = await Promise.resolve(bridge.showRewarded({ placement }));
+            granted = !!result;
+        } else if (isRewardedAdsTestMode()) {
+            await new Promise((resolve) => setTimeout(resolve, 1800));
+            granted = true;
+        } else {
+            pushFeed('Rewarded ads unavailable on this build.', 'warn');
+        }
+    } catch (err) {
+        console.warn(`Rewarded ad failed (${placement}):`, err);
+        pushFeed('Rewarded ad failed to load. Try again.', 'warn');
+    } finally {
+        state.ads.busy = false;
+        state.ads.lastRewardedAt = Date.now();
+    }
+
+    if (!granted) {
+        trackTelemetry('rewarded_end', { placement, granted: 0 });
+        updateRewardedOfferUI();
+        return false;
+    }
+
+    state.ads.dailyViews += 1;
+    trackTelemetry('rewarded_end', {
+        placement,
+        granted: 1,
+        dailyViews: state.ads.dailyViews
+    });
+    saveProgress();
+    updateRewardedOfferUI();
+    return true;
+}
+
+function updateRewardedOfferUI() {
+    ensureRewardedDailyState();
+    const rewardedEnabled = isRewardedAdsEnabled();
+    const providerReady = isRewardedProviderAvailable();
+
+    if (ui.rewardedEmbersBtn) {
+        ui.rewardedEmbersBtn.style.display = rewardedEnabled ? '' : 'none';
+        if (!rewardedEnabled) {
+            ui.rewardedEmbersBtn.disabled = true;
+        }
+    }
+    if (ui.gameOverRewardedBtn) {
+        ui.gameOverRewardedBtn.style.display = rewardedEnabled ? '' : 'none';
+        if (!rewardedEnabled) {
+            ui.gameOverRewardedBtn.disabled = true;
+        }
+    }
+
+    if (!rewardedEnabled) return;
+
+    if (ui.rewardedEmbersBtn) {
+        const viewsLeft = Math.max(0, MONETIZATION.REWARDED_DAILY_CAP - state.ads.dailyViews);
+        const claimsLeft = Math.max(0, MONETIZATION.START_BONUS_DAILY_CAP - state.ads.startBonusClaims);
+        const capped = !providerReady || viewsLeft <= 0 || claimsLeft <= 0;
+        ui.rewardedEmbersBtn.disabled = state.ads.busy || capped;
+        if (state.ads.busy) {
+            ui.rewardedEmbersBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AD IN PROGRESS...';
+        } else if (!providerReady) {
+            ui.rewardedEmbersBtn.innerHTML = '<i class="fa-solid fa-ban"></i> REWARDED ADS OFFLINE';
+        } else if (capped) {
+            ui.rewardedEmbersBtn.innerHTML = '<i class="fa-solid fa-circle-check"></i> DAILY BONUS CLAIMED';
+        } else {
+            ui.rewardedEmbersBtn.innerHTML = `<i class="fa-solid fa-circle-play"></i> WATCH AD +${MONETIZATION.START_BONUS_EMBERS} EMBERS (${claimsLeft} LEFT)`;
+        }
+    }
+
+    if (ui.gameOverRewardedBtn) {
+        const capped = state.ads.dailyViews >= MONETIZATION.REWARDED_DAILY_CAP;
+        const eligible = state.ads.gameOverBasePayout > 0 && !state.ads.gameOverRewardClaimed;
+        ui.gameOverRewardedBtn.disabled = state.ads.busy || capped || !eligible || !providerReady;
+        if (!eligible && state.ads.gameOverRewardClaimed) {
+            ui.gameOverRewardedBtn.innerHTML = `<i class="fa-solid fa-check"></i> BONUS CLAIMED +${state.ads.gameOverBonus}`;
+        } else if (!providerReady) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-ban"></i> REWARDED ADS OFFLINE';
+        } else if (!eligible) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-circle-play"></i> WATCH AD: +50% EMBERS';
+        } else if (state.ads.busy) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> AD IN PROGRESS...';
+        } else if (capped) {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-ban"></i> DAILY AD LIMIT REACHED';
+        } else {
+            ui.gameOverRewardedBtn.innerHTML = '<i class="fa-solid fa-circle-play"></i> WATCH AD: +50% EMBERS';
+        }
+    }
+}
+
+async function claimStartBonusReward() {
+    const granted = await requestRewardedAd('start_bonus', {
+        startFeed: 'Playing sponsored reward clip...',
+        warnOnBlock: 'Rewarded bonus unavailable right now.'
+    });
+    if (!granted) return;
+
+    const amount = MONETIZATION.START_BONUS_EMBERS;
+    state.ads.startBonusClaims += 1;
+    state.embers += amount;
+    saveProgress();
+    updateShopButtons();
+    updateHUD();
+    updateRewardedOfferUI();
+    pushFeed(`Sponsored reward: +${amount} embers.`, 'info');
+}
+
+async function claimGameOverRewardBonus() {
+    if (state.phase !== 'GAME_OVER') return;
+    if (state.ads.gameOverRewardClaimed) return;
+    if (state.ads.gameOverBasePayout <= 0) return;
+
+    const granted = await requestRewardedAd('game_over_bonus', {
+        startFeed: 'Playing sponsored reward clip...',
+        warnOnBlock: 'Rewarded bonus unavailable right now.'
+    });
+    if (!granted) return;
+
+    const bonus = Math.max(1, Math.floor(state.ads.gameOverBasePayout * MONETIZATION.GAME_OVER_BONUS_MULT));
+    state.ads.gameOverRewardClaimed = true;
+    state.ads.gameOverBonus = bonus;
+    state.embers += bonus;
+
+    if (ui.gameOverEarned) {
+        ui.gameOverEarned.textContent = String(state.ads.gameOverBasePayout + bonus);
+    }
+
+    saveProgress();
+    updateShopButtons();
+    updateHUD();
+    updateRewardedOfferUI();
+    pushFeed(`Rewarded boost secured: +${bonus} embers.`, 'info');
+}
+
+async function claimPerkRerollReward() {
+    if (!state.paused || state.pauseReason !== 'perk') return;
+    if (!ui.perkTitle || ui.perkTitle.textContent !== 'CHOOSE AUGMENT') return;
+    if (state.ads.perkRerollUsed) return;
+
+    const granted = await requestRewardedAd('perk_reroll', {
+        startFeed: 'Loading rewarded reroll...',
+        warnOnBlock: 'Reroll not available right now.'
+    });
+    if (!granted) return;
+
+    state.ads.perkRerollUsed = true;
+    pushFeed('Rewarded reroll unlocked. New augment options loaded.', 'info');
+    showPerkDraft({ fromRewardedReroll: true });
+}
+
+function isMultiplayerEnabled() {
+    return MULTIPLAYER_ENABLED;
+}
+
+function notifyMultiplayerDisabled() {
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now();
+    if (now - lastMultiplayerDisabledNoticeAt < 850) return;
+    lastMultiplayerDisabledNoticeAt = now;
+    setMultiplayerStatus(MULTIPLAYER_DISABLED_MESSAGE, 'warn');
+    pushFeed(MULTIPLAYER_DISABLED_MESSAGE, 'warn');
+}
+
+function isMultiplayerHost() {
+    return !!(state.multiplayer.inRoom && state.multiplayer.playerId && state.multiplayer.playerId === state.multiplayer.hostId);
+}
+
+function isRealMultiplayerSession() {
+    return !!(state.multiplayer.inRoom
+        && state.multiplayer.connected
+        && Array.isArray(state.multiplayer.players)
+        && state.multiplayer.players.length > 1
+        && state.partyMode === 'allies');
+}
+
+function netRound(v, digits = 3) {
+    const factor = Math.pow(10, digits);
+    return Math.round(v * factor) / factor;
+}
+
+function isAuthoritativeCoopActive() {
+    return !!(state.multiplayer
+        && state.multiplayer.authoritative
+        && state.multiplayer.authoritative.active
+        && state.started
+        && state.phase !== 'DEPLOY'
+        && state.phase !== 'GAME_OVER');
+}
+
+function resetAuthoritativeActionQueue() {
+    const queue = state.multiplayer.authoritative.actionQueue;
+    if (!queue) return;
+    queue.interact = 0;
+    queue.pulse = 0;
+    queue.shoot = 0;
+    queue.dash = 0;
+    queue.weather = 0;
+    queue.trap = 0;
+    queue.flare = 0;
+    queue.craft = 0;
+}
+
+function queueAuthoritativeAction(action, count = 1) {
+    if (!isAuthoritativeCoopActive()) return;
+    const queue = state.multiplayer.authoritative.actionQueue;
+    if (!queue || !Object.prototype.hasOwnProperty.call(queue, action)) return;
+    queue[action] = clamp((queue[action] || 0) + Math.max(1, Math.floor(count)), 0, 4);
+}
+
+function takeAuthoritativeActions() {
+    const queue = state.multiplayer.authoritative.actionQueue;
+    const out = {
+        interact: queue.interact || 0,
+        pulse: queue.pulse || 0,
+        shoot: queue.shoot || 0,
+        dash: queue.dash || 0,
+        weather: queue.weather || 0,
+        trap: queue.trap || 0,
+        flare: queue.flare || 0,
+        craft: queue.craft || 0
+    };
+    resetAuthoritativeActionQueue();
+    return out;
+}
+
+function disposeMeshDeep(mesh) {
+    if (!mesh) return;
+    if (mesh.traverse) {
+        mesh.traverse((node) => {
+            if (node && node.isMesh) {
+                if (node.geometry) node.geometry.dispose();
+                if (node.material) {
+                    if (Array.isArray(node.material)) {
+                        node.material.forEach((mat) => mat && mat.dispose && mat.dispose());
+                    } else if (node.material.dispose) {
+                        node.material.dispose();
+                    }
+                }
+            }
+        });
+    }
+    if (mesh.parent) mesh.parent.remove(mesh);
+}
+
+function clearAuthoritativeWorldMeshes() {
+    const maps = state.multiplayer.authoritative.meshMaps;
+    ['wood', 'shards', 'chests', 'enemies', 'traps', 'flares'].forEach((key) => {
+        const map = maps[key];
+        if (!map) return;
+        map.forEach((entry) => {
+            if (!entry) return;
+            disposeMeshDeep(entry.mesh || entry.group || null);
+        });
+        map.clear();
+    });
+    state.entities.resources.wood.length = 0;
+    state.entities.resources.shards.length = 0;
+    state.entities.chests.length = 0;
+    state.entities.enemies.length = 0;
+}
+
+function createAuthoritativeResourceMesh(kind, id) {
+    const isWood = kind === 'wood';
+    const mesh = new THREE.Mesh(
+        isWood
+            ? new THREE.CylinderGeometry(0.1, 0.1, 1.15, 8)
+            : new THREE.OctahedronGeometry(0.34, 0),
+        new THREE.MeshStandardMaterial({
+            color: isWood ? 0x8f6b45 : 0x77d7ff,
+            emissive: isWood ? 0x2a1b0f : 0x234a66,
+            emissiveIntensity: isWood ? 0.2 : 0.55,
+            roughness: isWood ? 0.82 : 0.28,
+            metalness: isWood ? 0.08 : 0.62
+        })
+    );
+    mesh.castShadow = isWood;
+    mesh.receiveShadow = isWood;
+    mesh.userData.authoritativeId = `${kind}_${id}`;
+    world.scene.add(mesh);
+    return { id, mesh, active: true };
+}
+
+function createAuthoritativeChestMesh(id) {
+    const group = new THREE.Group();
+    const base = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 0.62, 0.86),
+        new THREE.MeshStandardMaterial({
+            color: 0x72472c,
+            roughness: 0.8,
+            metalness: 0.12
+        })
+    );
+    base.position.y = 0.34;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    const lidPivot = new THREE.Group();
+    lidPivot.position.set(0, 0.78, -0.38);
+    group.add(lidPivot);
+
+    const lid = new THREE.Mesh(
+        new THREE.BoxGeometry(1.24, 0.34, 0.9),
+        new THREE.MeshStandardMaterial({
+            color: 0x94643c,
+            roughness: 0.74,
+            metalness: 0.14
+        })
+    );
+    lid.position.set(0, 0, 0.38);
+    lid.castShadow = true;
+    lid.receiveShadow = true;
+    lidPivot.add(lid);
+
+    const marker = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.2, 0),
+        new THREE.MeshBasicMaterial({
+            color: 0xffd48a,
+            transparent: true,
+            opacity: 0.85
+        })
+    );
+    marker.position.set(0, 1.15, 0);
+    group.add(marker);
+
+    const statusLight = new THREE.PointLight(0xffbe70, 0.55, 8, 2);
+    statusLight.position.set(0, 1.05, 0);
+    group.add(statusLight);
+
+    world.scene.add(group);
+    return {
+        id,
+        mesh: group,
+        base,
+        lidPivot,
+        marker,
+        statusLight,
+        opened: false,
+        pulseOffset: id * 0.37
+    };
+}
+
+function createAuthoritativeEnemyMesh(id, type = 'wraith', opts = {}) {
+    const nemesis = !!opts.nemesis;
+    const elite = !!opts.elite;
+    const color = nemesis
+        ? 0xffbd73
+        : type === 'charger'
+            ? 0xff9668
+            : type === 'leech'
+                ? 0x9eff8b
+                : type === 'brute'
+                    ? 0xff6fc8
+                    : type === 'titan'
+                        ? 0xffcf7a
+                        : 0xff6d7e;
+    const emissive = nemesis
+        ? 0x8c3508
+        : type === 'charger'
+            ? 0x69210d
+            : type === 'leech'
+                ? 0x1c4e17
+                : type === 'brute'
+                    ? 0x4a1837
+                    : type === 'titan'
+                        ? 0x713000
+                        : 0x4f1321;
+    const size = (type === 'titan' ? 1.16 : type === 'brute' ? 0.92 : type === 'leech' ? 0.74 : type === 'charger' ? 0.66 : 0.62)
+        + (elite ? 0.06 : 0)
+        + (nemesis ? 0.12 : 0);
+
+    const mesh = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(size, 1),
+        new THREE.MeshStandardMaterial({
+            color,
+            emissive,
+            emissiveIntensity: nemesis ? 2 : elite ? 1.75 : 1.5,
+            roughness: 0.28,
+            metalness: 0.35
+        })
+    );
+    mesh.castShadow = true;
+    world.scene.add(mesh);
+    return {
+        id,
+        type,
+        mesh,
+        targetPos: mesh.position.clone(),
+        velocity: new THREE.Vector3(),
+        targetRot: mesh.rotation.y,
+        lastStateAt: 0,
+        hp: 100,
+        maxHp: 100,
+        elite,
+        nemesis,
+        modifierId: String(opts.modifierId || '')
+    };
+}
+
+function syncAuthoritativeResourceCollection(kind, nodes) {
+    const key = kind === 'wood' ? 'wood' : 'shards';
+    const map = state.multiplayer.authoritative.meshMaps[key];
+    const seen = new Set();
+
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        const id = Number(node.id) || i + 1;
+        seen.add(id);
+        let entry = map.get(id);
+        if (!entry) {
+            entry = createAuthoritativeResourceMesh(key, id);
+            map.set(id, entry);
+        }
+
+        const x = Number(node.x) || 0;
+        const z = Number(node.z) || 0;
+        const y = terrainHeight(x, z) + (key === 'wood' ? 0.12 : 0.5);
+        entry.mesh.position.set(x, y, z);
+        if (key === 'wood') {
+            entry.mesh.rotation.x = Math.PI / 2;
+        } else {
+            entry.mesh.rotation.y += 0.015;
+        }
+        entry.active = !!node.active;
+        entry.mesh.visible = entry.active;
+    }
+
+    map.forEach((entry, id) => {
+        if (!seen.has(id)) {
+            disposeMeshDeep(entry.mesh);
+            map.delete(id);
+        }
+    });
+}
+
+function syncAuthoritativeChests(chests) {
+    const map = state.multiplayer.authoritative.meshMaps.chests;
+    const seen = new Set();
+    for (let i = 0; i < chests.length; i++) {
+        const chest = chests[i];
+        const id = Number(chest.id) || i + 1;
+        seen.add(id);
+        let entry = map.get(id);
+        if (!entry) {
+            entry = createAuthoritativeChestMesh(id);
+            map.set(id, entry);
+        }
+
+        const x = Number(chest.x) || 0;
+        const z = Number(chest.z) || 0;
+        const y = terrainHeight(x, z);
+        entry.mesh.position.set(x, y, z);
+        entry.opened = !!chest.opened;
+
+        const openRot = entry.opened ? -Math.PI * 0.62 : 0;
+        if (entry.lidPivot) {
+            entry.lidPivot.rotation.x = lerp(entry.lidPivot.rotation.x, openRot, 0.35);
+        }
+
+        if (entry.base && entry.base.material) {
+            entry.base.material.emissive.setHex(entry.opened ? 0x120c08 : 0x2f1a0d);
+            entry.base.material.emissiveIntensity = entry.opened ? 0.08 : 0.24;
+        }
+
+        if (entry.marker) {
+            if (entry.opened) {
+                entry.marker.visible = false;
+            } else {
+                entry.marker.visible = true;
+                entry.marker.rotation.y += 0.06;
+                entry.marker.position.y = 1.15 + Math.sin(world.time * 4 + entry.pulseOffset) * 0.05;
+            }
+        }
+
+        if (entry.statusLight) {
+            entry.statusLight.intensity = entry.opened
+                ? 0.08
+                : 0.45 + Math.sin(world.time * 3 + entry.pulseOffset) * 0.16;
+            entry.statusLight.distance = entry.opened ? 3 : 8;
+        }
+    }
+
+    map.forEach((entry, id) => {
+        if (!seen.has(id)) {
+            disposeMeshDeep(entry.mesh);
+            map.delete(id);
+        }
+    });
+}
+
+function syncAuthoritativeEnemies(enemies) {
+    const map = state.multiplayer.authoritative.meshMaps.enemies;
+    const seen = new Set();
+    const now = performance.now();
+    for (let i = 0; i < enemies.length; i++) {
+        const enemy = enemies[i];
+        const id = Number(enemy.id) || i + 1;
+        seen.add(id);
+        let entry = map.get(id);
+        if (!entry) {
+            entry = createAuthoritativeEnemyMesh(id, enemy.type || 'wraith', {
+                elite: !!enemy.elite,
+                nemesis: !!enemy.nemesis,
+                modifierId: enemy.modifierId || ''
+            });
+            map.set(id, entry);
+        } else if ((enemy.type || 'wraith') !== entry.type
+            || !!enemy.elite !== !!entry.elite
+            || !!enemy.nemesis !== !!entry.nemesis
+            || String(enemy.modifierId || '') !== String(entry.modifierId || '')) {
+            disposeMeshDeep(entry.mesh);
+            entry = createAuthoritativeEnemyMesh(id, enemy.type || 'wraith', {
+                elite: !!enemy.elite,
+                nemesis: !!enemy.nemesis,
+                modifierId: enemy.modifierId || ''
+            });
+            map.set(id, entry);
+        }
+
+        const x = Number(enemy.x) || 0;
+        const y = Number(enemy.y) || terrainHeight(x, Number(enemy.z) || 0) + 1;
+        const z = Number(enemy.z) || 0;
+        if (!entry.targetPos) {
+            entry.targetPos = new THREE.Vector3(x, y, z);
+            entry.mesh.position.set(x, y, z);
+            entry.velocity = new THREE.Vector3();
+            entry.lastStateAt = now;
+        } else if (!entry.mesh.userData.authSeen) {
+            entry.targetPos.set(x, y, z);
+            entry.mesh.position.set(x, y, z);
+            entry.mesh.userData.authSeen = true;
+            entry.velocity.set(0, 0, 0);
+            entry.lastStateAt = now;
+        } else {
+            const dtSec = clamp((now - (entry.lastStateAt || now)) / 1000, 0.016, 0.35);
+            entry.velocity.set(
+                (x - entry.targetPos.x) / dtSec,
+                (y - entry.targetPos.y) / dtSec,
+                (z - entry.targetPos.z) / dtSec
+            );
+            entry.targetPos.set(x, y, z);
+            entry.lastStateAt = now;
+        }
+        const nextRot = Number(enemy.rot);
+        if (Number.isFinite(nextRot)) {
+            entry.targetRot = nextRot;
+        }
+        entry.hp = Number(enemy.hp) || entry.hp;
+        entry.maxHp = Number(enemy.maxHp) || entry.maxHp;
+        entry.elite = !!enemy.elite;
+        entry.nemesis = !!enemy.nemesis;
+        entry.modifierId = String(enemy.modifierId || '');
+    }
+
+    map.forEach((entry, id) => {
+        if (!seen.has(id)) {
+            disposeMeshDeep(entry.mesh);
+            map.delete(id);
+        }
+    });
+}
+
+function createAuthoritativeTrapMesh(id) {
+    const group = new THREE.Group();
+    const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.72, 0.98, 0.34, 10),
+        new THREE.MeshStandardMaterial({
+            color: 0x4a5f77,
+            roughness: 0.76,
+            metalness: 0.28
+        })
+    );
+    base.position.y = 0.18;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.8, 1.0, 36),
+        new THREE.MeshBasicMaterial({
+            color: 0x7bcfff,
+            transparent: true,
+            opacity: 0.32,
+            side: THREE.DoubleSide
+        })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    group.add(ring);
+
+    world.scene.add(group);
+    return {
+        id,
+        mesh: group,
+        ring,
+        targetPos: group.position.clone(),
+        life: 0,
+        maxLife: 1,
+        radius: 7
+    };
+}
+
+function syncAuthoritativeTraps(traps) {
+    const map = state.multiplayer.authoritative.meshMaps.traps;
+    const seen = new Set();
+    for (let i = 0; i < traps.length; i++) {
+        const trap = traps[i];
+        const id = Number(trap.id) || i + 1;
+        seen.add(id);
+        let entry = map.get(id);
+        if (!entry) {
+            entry = createAuthoritativeTrapMesh(id);
+            map.set(id, entry);
+        }
+
+        const x = Number(trap.x) || 0;
+        const z = Number(trap.z) || 0;
+        const y = terrainHeight(x, z);
+        if (!entry.targetPos) {
+            entry.targetPos = new THREE.Vector3(x, y, z);
+            entry.mesh.position.set(x, y, z);
+        } else if (!entry.mesh.userData.authSeen) {
+            entry.targetPos.set(x, y, z);
+            entry.mesh.position.set(x, y, z);
+            entry.mesh.userData.authSeen = true;
+        } else {
+            entry.targetPos.set(x, y, z);
+        }
+        entry.radius = Number(trap.radius) || entry.radius;
+        entry.life = Number(trap.life) || 0;
+        entry.maxLife = Math.max(0.001, Number(trap.maxLife) || 1);
+        const lifeT = clamp(entry.life / entry.maxLife, 0, 1);
+        entry.ring.material.opacity = 0.1 + lifeT * 0.34;
+        const scale = entry.radius / 7;
+        entry.ring.scale.set(scale, scale, 1);
+        entry.ring.rotation.z += 0.01;
+    }
+
+    map.forEach((entry, id) => {
+        if (!seen.has(id)) {
+            disposeMeshDeep(entry.mesh);
+            map.delete(id);
+        }
+    });
+}
+
+function createAuthoritativeFlareMesh(id) {
+    const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(1.1, 14, 14),
+        new THREE.MeshBasicMaterial({
+            color: 0x86dcff,
+            transparent: true,
+            opacity: 0.24
+        })
+    );
+    world.scene.add(mesh);
+    return {
+        id,
+        mesh,
+        targetPos: mesh.position.clone(),
+        life: 0,
+        maxLife: 1,
+        radius: 22
+    };
+}
+
+function syncAuthoritativeFlares(flares) {
+    const map = state.multiplayer.authoritative.meshMaps.flares;
+    const seen = new Set();
+    for (let i = 0; i < flares.length; i++) {
+        const flare = flares[i];
+        const id = Number(flare.id) || i + 1;
+        seen.add(id);
+        let entry = map.get(id);
+        if (!entry) {
+            entry = createAuthoritativeFlareMesh(id);
+            map.set(id, entry);
+        }
+
+        const x = Number(flare.x) || 0;
+        const z = Number(flare.z) || 0;
+        const y = terrainHeight(x, z) + 1;
+        if (!entry.targetPos) {
+            entry.targetPos = new THREE.Vector3(x, y, z);
+            entry.mesh.position.set(x, y, z);
+        } else if (!entry.mesh.userData.authSeen) {
+            entry.targetPos.set(x, y, z);
+            entry.mesh.position.set(x, y, z);
+            entry.mesh.userData.authSeen = true;
+        } else {
+            entry.targetPos.set(x, y, z);
+        }
+        entry.radius = Number(flare.radius) || entry.radius;
+        entry.life = Number(flare.life) || 0;
+        entry.maxLife = Math.max(0.001, Number(flare.maxLife) || 1);
+        const lifeT = clamp(entry.life / entry.maxLife, 0, 1);
+        entry.mesh.material.opacity = 0.06 + lifeT * 0.28;
+        const scale = entry.radius / 6.5;
+        entry.mesh.scale.setScalar(scale);
+    }
+
+    map.forEach((entry, id) => {
+        if (!seen.has(id)) {
+            disposeMeshDeep(entry.mesh);
+            map.delete(id);
+        }
+    });
+}
+
+function updateAuthoritativeVisualSmoothing(dt) {
+    if (!isAuthoritativeCoopActive()) return;
+    const maps = state.multiplayer.authoritative.meshMaps;
+    const now = performance.now();
+    const extrapMaxSec = CONFIG.MULTIPLAYER_REMOTE_EXTRAP_MS / 1000;
+    const enemyLerp = 1 - Math.exp(-dt * CONFIG.MULTIPLAYER_ENEMY_INTERP);
+    const areaLerp = 1 - Math.exp(-dt * CONFIG.MULTIPLAYER_AREA_EFFECT_INTERP);
+
+    maps.enemies.forEach((entry) => {
+        if (!entry || !entry.mesh || !entry.targetPos) return;
+        const extrapSec = entry.lastStateAt > 0
+            ? clamp((now - entry.lastStateAt) / 1000, 0, extrapMaxSec)
+            : 0;
+        TMP.authEnemyPredPos.copy(entry.targetPos).addScaledVector(entry.velocity, extrapSec);
+        entry.mesh.position.lerp(TMP.authEnemyPredPos, enemyLerp);
+        const rot = Number.isFinite(entry.targetRot) ? entry.targetRot : entry.mesh.rotation.y;
+        entry.mesh.rotation.y = lerpAngle(entry.mesh.rotation.y, rot, enemyLerp);
+    });
+
+    maps.traps.forEach((entry) => {
+        if (!entry || !entry.mesh || !entry.targetPos) return;
+        entry.mesh.position.lerp(entry.targetPos, areaLerp);
+    });
+
+    maps.flares.forEach((entry) => {
+        if (!entry || !entry.mesh || !entry.targetPos) return;
+        entry.mesh.position.lerp(entry.targetPos, areaLerp);
+    });
+}
+
+function rebuildAuthoritativeMirrorArrays() {
+    const woodMap = state.multiplayer.authoritative.meshMaps.wood;
+    const shardMap = state.multiplayer.authoritative.meshMaps.shards;
+    const chestMap = state.multiplayer.authoritative.meshMaps.chests;
+    const enemyMap = state.multiplayer.authoritative.meshMaps.enemies;
+    const trapMap = state.multiplayer.authoritative.meshMaps.traps;
+    const flareMap = state.multiplayer.authoritative.meshMaps.flares;
+
+    const woodMirrors = state.entities.resources.wood;
+    woodMirrors.length = 0;
+    woodMap.forEach((entry) => {
+        if (!entry.mirror) {
+            entry.mirror = { mesh: entry.mesh, active: !!entry.active };
+        }
+        entry.mirror.mesh = entry.mesh;
+        entry.mirror.active = !!entry.active;
+        woodMirrors.push(entry.mirror);
+    });
+
+    const shardMirrors = state.entities.resources.shards;
+    shardMirrors.length = 0;
+    shardMap.forEach((entry) => {
+        if (!entry.mirror) {
+            entry.mirror = { mesh: entry.mesh, active: !!entry.active };
+        }
+        entry.mirror.mesh = entry.mesh;
+        entry.mirror.active = !!entry.active;
+        shardMirrors.push(entry.mirror);
+    });
+
+    const chestMirrors = state.entities.chests;
+    chestMirrors.length = 0;
+    chestMap.forEach((entry) => {
+        if (!entry.mirror) {
+            entry.mirror = {
+                mesh: entry.mesh,
+                x: entry.mesh.position.x,
+                z: entry.mesh.position.z,
+                opened: !!entry.opened,
+                pulseOffset: entry.pulseOffset || 0
+            };
+        }
+        entry.mirror.mesh = entry.mesh;
+        entry.mirror.x = entry.mesh.position.x;
+        entry.mirror.z = entry.mesh.position.z;
+        entry.mirror.opened = !!entry.opened;
+        entry.mirror.pulseOffset = entry.pulseOffset || 0;
+        chestMirrors.push(entry.mirror);
+    });
+
+    const enemyMirrors = state.entities.enemies;
+    enemyMirrors.length = 0;
+    enemyMap.forEach((entry) => {
+        if (!entry.mirror) {
+            entry.mirror = {
+                mesh: entry.mesh,
+                hp: entry.hp,
+                maxHp: entry.maxHp,
+                archetype: { id: entry.type || 'wraith' },
+                modifier: null,
+                nemesis: !!entry.nemesis
+            };
+        }
+        entry.mirror.mesh = entry.mesh;
+        entry.mirror.hp = entry.hp;
+        entry.mirror.maxHp = entry.maxHp;
+        entry.mirror.archetype.id = entry.type || 'wraith';
+        if (entry.modifierId) {
+            if (!entry.mirror.modifier) {
+                entry.mirror.modifier = { id: entry.modifierId, tint: 0xffffff };
+            } else {
+                entry.mirror.modifier.id = entry.modifierId;
+            }
+        } else {
+            entry.mirror.modifier = null;
+        }
+        entry.mirror.nemesis = !!entry.nemesis;
+        enemyMirrors.push(entry.mirror);
+    });
+
+    const trapMirrors = state.entities.activeTraps;
+    trapMirrors.length = 0;
+    trapMap.forEach((entry) => {
+        if (!entry.mirror) {
+            entry.mirror = {
+                x: entry.mesh.position.x,
+                z: entry.mesh.position.z,
+                radius: entry.radius,
+                life: entry.life,
+                maxLife: entry.maxLife,
+                base: entry.mesh,
+                ring: entry.ring,
+                light: null
+            };
+        }
+        entry.mirror.x = entry.mesh.position.x;
+        entry.mirror.z = entry.mesh.position.z;
+        entry.mirror.radius = entry.radius;
+        entry.mirror.life = entry.life;
+        entry.mirror.maxLife = entry.maxLife;
+        entry.mirror.base = entry.mesh;
+        entry.mirror.ring = entry.ring;
+        trapMirrors.push(entry.mirror);
+    });
+
+    const flareMirrors = state.entities.activeFlares;
+    flareMirrors.length = 0;
+    flareMap.forEach((entry) => {
+        if (!entry.mirror) {
+            entry.mirror = {
+                mesh: entry.mesh,
+                ring: null,
+                light: null,
+                radius: entry.radius,
+                life: entry.life,
+                maxLife: entry.maxLife
+            };
+        }
+        entry.mirror.mesh = entry.mesh;
+        entry.mirror.radius = entry.radius;
+        entry.mirror.life = entry.life;
+        entry.mirror.maxLife = entry.maxLife;
+        flareMirrors.push(entry.mirror);
+    });
+}
+
+function endAuthoritativeSession(reason = 'Session ended.') {
+    notifyPlatformGameplayStop();
+    state.multiplayer.authoritative.active = false;
+    state.multiplayer.authoritative.seed = '';
+    state.multiplayer.pingMs = 0;
+    resetAuthoritativeActionQueue();
+    clearAuthoritativeWorldMeshes();
+    pushFeed(reason, 'warn');
+}
+
+function getInputAxes() {
+    const keyboardX = (state.keys.d || state.keys.arrowright ? 1 : 0) - (state.keys.a || state.keys.arrowleft ? 1 : 0);
+    const keyboardY = (state.keys.w || state.keys.arrowup ? 1 : 0) - (state.keys.s || state.keys.arrowdown ? 1 : 0);
+    const touchX = state.touchInput.enabled ? state.touchInput.moveX : 0;
+    const touchY = state.touchInput.enabled ? state.touchInput.moveY : 0;
+
+    return {
+        x: clamp(keyboardX + touchX, -1, 1),
+        y: clamp(keyboardY + touchY, -1, 1)
+    };
+}
+
 function getMovementDirection() {
-    const inputX = (state.keys.d || state.keys.arrowright ? 1 : 0) - (state.keys.a || state.keys.arrowleft ? 1 : 0);
-    const inputY = (state.keys.w || state.keys.arrowup ? 1 : 0) - (state.keys.s || state.keys.arrowdown ? 1 : 0);
+    const input = getInputAxes();
+    const inputX = input.x;
+    const inputY = input.y;
 
     TMP.moveDir.set(0, 0, 0);
     if (inputX === 0 && inputY === 0) return TMP.moveDir;
@@ -1047,10 +2605,13 @@ function resetRunMetrics() {
 function resetRunSystems() {
     state.paused = false;
     state.pauseReason = 'none';
+    state.runAssist = { ...BASE_RUN_ASSIST };
     state.pulseCooldown = 0;
     state.pulseCooldownMax = CONFIG.PULSE_BASE_COOLDOWN;
     state.boltCooldown = 0;
     state.boltCooldownMax = CONFIG.BOLT_FIRE_COOLDOWN;
+    state.weatherControlCooldown = 0;
+    state.weatherControlCooldownMax = CONFIG.WEATHER_CONTROL_COOLDOWN;
     state.fireOutTimer = CONFIG.FIRE_OUT_GRACE;
     state.fireCriticalWarned = false;
     state.comboValue = 0;
@@ -1398,6 +2959,93 @@ function clearEmberOrbs() {
     state.entities.emberOrbs.length = 0;
 }
 
+function clearAlliedSentinels() {
+    for (let i = 0; i < state.entities.alliedSentinels.length; i++) {
+        const ally = state.entities.alliedSentinels[i];
+        if (ally.mesh && ally.mesh.parent) ally.mesh.parent.remove(ally.mesh);
+    }
+    state.entities.alliedSentinels.length = 0;
+}
+
+function spawnAlliedSentinels() {
+    clearAlliedSentinels();
+    if (state.partyMode !== 'allies') return;
+    if (isRealMultiplayerSession()) return;
+
+    for (let i = 0; i < CONFIG.ALLY_SENTINEL_COUNT; i++) {
+        const mesh = new THREE.Mesh(
+            new THREE.IcosahedronGeometry(0.36, 1),
+            new THREE.MeshStandardMaterial({
+                color: 0x8fd8ff,
+                emissive: 0x2a6b9f,
+                emissiveIntensity: 1.6,
+                roughness: 0.22,
+                metalness: 0.55
+            })
+        );
+        mesh.castShadow = true;
+        const light = new THREE.PointLight(0x7ec9ff, 0.8, 10, 2);
+        mesh.add(light);
+        world.scene.add(mesh);
+
+        state.entities.alliedSentinels.push({
+            mesh,
+            angle: (Math.PI * 2 * i) / CONFIG.ALLY_SENTINEL_COUNT,
+            radius: 2.8 + i * 0.45,
+            fireCooldown: rand(0.25, 1.0),
+            bobOffset: rand(0, Math.PI * 2)
+        });
+    }
+}
+
+function updateAlliedSentinels(dt) {
+    if (state.entities.alliedSentinels.length === 0 || !state.entities.player) return;
+
+    const player = state.entities.player.position;
+    for (let i = 0; i < state.entities.alliedSentinels.length; i++) {
+        const ally = state.entities.alliedSentinels[i];
+        ally.angle += dt * (1.1 + i * 0.18);
+        const tx = player.x + Math.sin(ally.angle) * ally.radius;
+        const tz = player.z + Math.cos(ally.angle) * ally.radius;
+        const ty = player.y + 1.6 + Math.sin(world.time * 3 + ally.bobOffset) * 0.22;
+
+        const followT = 1 - Math.exp(-dt * 8);
+        ally.mesh.position.x = lerp(ally.mesh.position.x, tx, followT);
+        ally.mesh.position.y = lerp(ally.mesh.position.y, ty, followT);
+        ally.mesh.position.z = lerp(ally.mesh.position.z, tz, followT);
+        ally.mesh.rotation.y += dt * 1.9;
+        ally.fireCooldown -= dt;
+
+        if (state.phase !== 'SURVIVE' || ally.fireCooldown > 0) continue;
+
+        let nearest = null;
+        let nearestDist = Infinity;
+        for (let e = 0; e < state.entities.enemies.length; e++) {
+            const enemy = state.entities.enemies[e];
+            const d = dist2(ally.mesh.position.x, ally.mesh.position.z, enemy.mesh.position.x, enemy.mesh.position.z);
+            if (d < nearestDist) {
+                nearest = enemy;
+                nearestDist = d;
+            }
+        }
+
+        if (nearest && nearestDist < 28) {
+            const damage = 18 + state.day * 1.8;
+            damageEnemy(nearest, damage);
+            if (nearest.hp <= 0) {
+                resolveEnemyDeath(nearest, 'ally');
+                addMomentum(2);
+            } else {
+                spawnFloatingText('ALLY HIT', nearest.mesh.position, '#9ad8ff');
+            }
+            ally.fireCooldown = 1.05 + rand(0, 0.35);
+            trackTelemetry('ally_strike', { day: state.day });
+        } else {
+            ally.fireCooldown = 0.3 + rand(0, 0.4);
+        }
+    }
+}
+
 function updateEmberOrbs(dt) {
     const player = state.entities.player ? state.entities.player.position : null;
     if (!player) return;
@@ -1454,12 +3102,13 @@ function grantEmbers(baseAmount, opts = {}) {
     if (useDifficulty) total *= state.runtime.emberMultiplier;
     if (useCombo) total *= state.comboMultiplier;
     total *= state.runMods.emberGainMult;
+    total *= state.runAssist.emberGainMult;
     if (state.overdrive.active) total *= CONFIG.OVERDRIVE_EMBER_MULT;
     if (state.pushStreak > 0) {
         total *= 1 + state.pushStreak * CONFIG.PUSH_REWARD_STEP;
     }
 
-    const final = Math.floor(total);
+    const final = Math.max(0, Math.floor(total));
     state.embers += final;
     return final;
 }
@@ -1742,15 +3391,20 @@ function resolveDailyChallengeResult() {
     };
 }
 
-function initEngine() {
+async function initEngine() {
     if (typeof THREE === 'undefined') {
         alert('Three.js failed to load.');
         return;
     }
 
+    await initPlatformSdk();
+    notifyPlatformLoadingStart();
+
     cacheUI();
     bindUIActions();
     bindInput();
+    initTouchControls();
+    initMultiplayer();
 
     initRenderer();
     initSceneAndMaterials();
@@ -1762,13 +3416,20 @@ function initEngine() {
     renderRelicLoadoutUI();
     updateShopButtons();
     updateHUD();
+    updateRewardedOfferUI();
     maybeShowFirstTimeGuide();
+    notifyPlatformLoadingStop();
 
     state.lastTime = performance.now();
     animate(state.lastTime);
 }
 
-window.addEventListener('DOMContentLoaded', initEngine);
+window.addEventListener('DOMContentLoaded', () => {
+    initEngine().catch((err) => {
+        notifyPlatformLoadingStop();
+        console.error('Engine init failed:', err);
+    });
+});
 
 function cacheUI() {
     ui.startScreen = document.getElementById('start-screen');
@@ -1803,7 +3464,13 @@ function cacheUI() {
     ui.interactionText = document.getElementById('interaction-text');
 
     ui.startBtn = document.getElementById('start-btn');
+    ui.rewardedEmbersBtn = document.getElementById('rewarded-embers-btn');
     ui.restartBtn = document.getElementById('restart-btn');
+    ui.gameOverRewardedBtn = document.getElementById('gameover-rewarded-btn');
+    ui.gameOverEarned = document.getElementById('earned-embers');
+    ui.gameOverTitle = document.getElementById('game-over-title');
+    ui.gameOverMessage = document.getElementById('game-over-message');
+    ui.openMultiplayerBtn = document.getElementById('open-multiplayer-btn');
     ui.openShopBtn = document.getElementById('open-shop-btn');
     ui.closeShopBtn = document.getElementById('close-shop-btn');
     ui.quickShopBtn = document.getElementById('shop-btn');
@@ -1847,6 +3514,33 @@ function cacheUI() {
     ui.settingSfxEnabled = document.getElementById('setting-sfx-enabled');
     ui.settingReduceFlash = document.getElementById('setting-reduce-flash');
     ui.settingShowControls = document.getElementById('setting-show-controls');
+    ui.craftingScreen = document.getElementById('crafting-screen');
+    ui.craftingOptions = document.getElementById('crafting-options');
+    ui.craftingSubtitle = document.getElementById('crafting-subtitle');
+    ui.closeCraftingBtn = document.getElementById('close-crafting-btn');
+    ui.multiplayerScreen = document.getElementById('multiplayer-screen');
+    ui.closeMultiplayerBtn = document.getElementById('close-multiplayer-btn');
+    ui.multiplayerStatus = document.getElementById('multiplayer-status');
+    ui.mpNameInput = document.getElementById('mp-name-input');
+    ui.mpRoomInput = document.getElementById('mp-room-input');
+    ui.mpCreateBtn = document.getElementById('mp-create-btn');
+    ui.mpJoinBtn = document.getElementById('mp-join-btn');
+    ui.mpLeaveBtn = document.getElementById('mp-leave-btn');
+    ui.mpStartBtn = document.getElementById('mp-start-btn');
+    ui.mpCopyCodeBtn = document.getElementById('mp-copy-code-btn');
+    ui.mpRoomDisplay = document.getElementById('mp-room-display');
+    ui.mpStartHint = document.getElementById('mp-start-hint');
+    ui.mpRoster = document.getElementById('mp-roster');
+
+    ui.touchControls = document.getElementById('touch-controls');
+    ui.touchMovePad = document.getElementById('touch-move-pad');
+    ui.touchStick = document.getElementById('touch-stick');
+    ui.touchSprintBtn = document.getElementById('touch-sprint-btn');
+    ui.touchDashBtn = document.getElementById('touch-dash-btn');
+    ui.touchPulseBtn = document.getElementById('touch-pulse-btn');
+    ui.touchWeatherBtn = document.getElementById('touch-weather-btn');
+    ui.touchInteractBtn = document.getElementById('touch-interact-btn');
+    ui.touchShootBtn = document.getElementById('touch-shoot-btn');
 }
 
 function isScreenVisible(node) {
@@ -1854,7 +3548,10 @@ function isScreenVisible(node) {
 }
 
 function isInputBlockedByOverlay() {
-    return isScreenVisible(ui.settingsScreen) || isScreenVisible(ui.guideScreen);
+    return isScreenVisible(ui.settingsScreen)
+        || isScreenVisible(ui.guideScreen)
+        || isScreenVisible(ui.craftingScreen)
+        || isScreenVisible(ui.multiplayerScreen);
 }
 
 function syncSettingsUI() {
@@ -1895,6 +3592,12 @@ function applySettingsRuntime(opts = {}) {
     }
 
     if (opts.save) {
+        trackTelemetry('settings_update', {
+            volume: Number(state.settings.masterVolume.toFixed(2)),
+            shake: Number(state.settings.screenShakeScale.toFixed(2)),
+            sfx: state.settings.sfxEnabled ? 1 : 0,
+            reduceFlash: state.settings.reduceFlashes ? 1 : 0
+        });
         saveProgress();
     }
 }
@@ -1924,6 +3627,7 @@ function openSettingsScreen() {
         state.paused = true;
         state.pauseReason = 'settings';
         state.settingsResumeOnClose = true;
+        notifyPlatformGameplayStop();
     }
     state.keys = {};
     updateHUD();
@@ -1939,6 +3643,9 @@ function closeSettingsScreen(save = true) {
     if (state.settingsResumeOnClose && state.started && state.phase !== 'GAME_OVER') {
         state.paused = false;
         state.pauseReason = 'none';
+        if (state.phase !== 'DEPLOY') {
+            notifyPlatformGameplayStart();
+        }
     }
     state.settingsResumeOnClose = false;
     state.keys = {};
@@ -1957,12 +3664,1403 @@ function maybeShowFirstTimeGuide() {
     }
 }
 
+function getNearbyDeployPortal() {
+    if (!state.entities.deployHub || !state.entities.player) return null;
+    const player = state.entities.player.position;
+    const portals = state.entities.deployHub.portals || [];
+    let nearest = null;
+    let nearestDist = Infinity;
+    const centerX = state.entities.deployHub.x || CONFIG.DEPLOY_HUB_X;
+    for (let i = 0; i < portals.length; i++) {
+        const portal = portals[i];
+        const d = dist2(player.x, player.z, portal.x, portal.z);
+        if (d >= CONFIG.DEPLOY_PORTAL_RADIUS) continue;
+        if (d < nearestDist - 0.01) {
+            nearest = portal;
+            nearestDist = d;
+            continue;
+        }
+
+        // If the player is exactly between portals, bias by side of the hub.
+        if (Math.abs(d - nearestDist) <= 0.01) {
+            const preferId = isMultiplayerEnabled() && player.x >= centerX ? 'allies' : 'solo';
+            if (portal.id === preferId) {
+                nearest = portal;
+                nearestDist = d;
+            }
+        }
+    }
+    return nearest;
+}
+
+function getNearbyChest() {
+    if (!state.entities.player) return null;
+    const player = state.entities.player.position;
+    for (let i = 0; i < state.entities.chests.length; i++) {
+        const chest = state.entities.chests[i];
+        if (!chest.opened && dist2(player.x, player.z, chest.x, chest.z) < 3.5) {
+            return chest;
+        }
+    }
+    return null;
+}
+
+function getNearbyOpenedChest() {
+    if (!state.entities.player) return null;
+    const player = state.entities.player.position;
+    for (let i = 0; i < state.entities.chests.length; i++) {
+        const chest = state.entities.chests[i];
+        if (chest.opened && dist2(player.x, player.z, chest.x, chest.z) < 3.5) {
+            return chest;
+        }
+    }
+    return null;
+}
+
+function getCraftingTableDistance() {
+    if (!state.entities.player || !state.entities.craftingTable) return Infinity;
+    const player = state.entities.player.position;
+    return dist2(player.x, player.z, state.entities.craftingTable.x, state.entities.craftingTable.z);
+}
+
+function openChest(chest) {
+    if (!chest || chest.opened) return;
+
+    chest.opened = true;
+    if (chest.lidPivot) {
+        chest.lidPivot.rotation.x = -Math.PI * 0.55;
+    }
+
+    const roll = chest.roll;
+    let rewardText = 'CHEST OPENED';
+    if (roll < 0.3) {
+        const woodGain = 2 + Math.floor(random() * 4);
+        state.wood += woodGain;
+        rewardText = `+${woodGain} WOOD`;
+    } else if (roll < 0.58) {
+        const shardGain = 1 + Math.floor(random() * 3);
+        state.shards += shardGain;
+        rewardText = `+${shardGain} SHARDS`;
+    } else if (roll < 0.83) {
+        const emberGain = grantEmbers(12 + Math.floor(random() * 24), { useDifficulty: false, useCombo: false });
+        state.score += emberGain;
+        rewardText = `+${emberGain} EMBERS`;
+    } else {
+        const woodGain = 2 + Math.floor(random() * 3);
+        const shardGain = 1 + Math.floor(random() * 2);
+        state.wood += woodGain;
+        state.shards += shardGain;
+        rewardText = `+${woodGain}W +${shardGain}S`;
+    }
+
+    if (hasGadget('map_kit') && random() < 0.2) {
+        const bonus = 6 + Math.floor(random() * 8);
+        const emberGain = grantEmbers(bonus, { useDifficulty: false, useCombo: false });
+        state.score += emberGain;
+        rewardText += ` +${emberGain}E`;
+    }
+
+    addMomentum(4);
+    spawnFloatingText(rewardText, chest.mesh.position, '#ffd3a3');
+    pushFeed(`Chest loot: ${rewardText}`, 'info');
+    AudioManager.play('collect');
+    trackTelemetry('chest_open', { day: state.day, reward: rewardText });
+    updateHUD();
+}
+
+function renderCraftingScreen() {
+    if (!ui.craftingOptions) return;
+    ui.craftingOptions.innerHTML = '';
+
+    CRAFTING_RECIPES.forEach((recipe) => {
+        const owned = hasGadget(recipe.id);
+        const costs = recipe.costs || {};
+        const afford = hasRecipeResources(recipe);
+
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = `craft-card${owned ? ' owned' : ''}`;
+        card.disabled = owned;
+        card.innerHTML = `
+            <span class="craft-name">${recipe.name}</span>
+            <span class="craft-desc">${recipe.desc}</span>
+            <span class="craft-cost">WOOD ${costs.wood || 0} • SHARDS ${costs.shards || 0} • EMBERS ${costs.embers || 0}</span>
+            <span class="craft-state">${owned ? 'BUILT' : (afford ? 'BUILD' : 'INSUFFICIENT')}</span>
+        `;
+
+        if (!owned) {
+            card.addEventListener('click', () => craftStructure(recipe.id));
+            if (!afford) card.classList.add('insufficient');
+        }
+        ui.craftingOptions.appendChild(card);
+    });
+}
+
+function openCraftingScreen() {
+    if (!ui.craftingScreen || isScreenVisible(ui.craftingScreen)) return;
+    if (state.phase === 'DEPLOY') return;
+    if (isScreenVisible(ui.settingsScreen) || isScreenVisible(ui.guideScreen)) return;
+
+    state.craftingResumeOnClose = false;
+    if (state.started && state.phase !== 'GAME_OVER' && !state.paused) {
+        state.paused = true;
+        state.pauseReason = 'crafting';
+        state.craftingResumeOnClose = true;
+        notifyPlatformGameplayStop();
+    }
+
+    if (ui.craftingSubtitle) {
+        ui.craftingSubtitle.textContent = `Wood ${Math.floor(state.wood)} • Shards ${Math.floor(state.shards)} • Embers ${Math.floor(state.embers)}`;
+    }
+    renderCraftingScreen();
+    ui.craftingScreen.classList.remove('hidden');
+    state.keys = {};
+    updateHUD();
+}
+
+function closeCraftingScreen() {
+    if (!ui.craftingScreen || !isScreenVisible(ui.craftingScreen)) return;
+    ui.craftingScreen.classList.add('hidden');
+    if (state.craftingResumeOnClose && state.started && state.phase !== 'GAME_OVER') {
+        state.paused = false;
+        state.pauseReason = 'none';
+        if (state.phase !== 'DEPLOY') {
+            notifyPlatformGameplayStart();
+        }
+    }
+    state.craftingResumeOnClose = false;
+    state.keys = {};
+    updateHUD();
+}
+
+function craftStructure(recipeId) {
+    const recipe = getRecipeById(recipeId);
+    if (!recipe) return;
+    if (hasGadget(recipe.id)) {
+        pushFeed(`${recipe.name} already built.`, 'warn');
+        return;
+    }
+    if (!hasRecipeResources(recipe)) {
+        pushFeed(`Need more resources for ${recipe.name}.`, 'warn');
+        return;
+    }
+
+    const costs = recipe.costs || {};
+    state.wood -= costs.wood || 0;
+    state.shards -= costs.shards || 0;
+    state.embers -= costs.embers || 0;
+    state.gadgets[recipe.id] = true;
+
+    if (recipe.id === 'sundial') {
+        state.runtime.dayDuration += 16;
+        if (state.phase === 'GATHER') {
+            state.timeLeft += 10;
+        }
+    } else if (recipe.id === 'weather_controller') {
+        state.weatherControlCooldown = 0;
+    }
+
+    spawnFloatingText(`${recipe.name.toUpperCase()} BUILT`, state.entities.player.position, '#9ad4ff');
+    pushFeed(`${recipe.name} built at crafting table.`, 'info');
+    AudioManager.play('perk');
+    addMomentum(8);
+    trackTelemetry('craft_build', { id: recipe.id, day: state.day });
+    saveProgress();
+    if (ui.craftingSubtitle) {
+        ui.craftingSubtitle.textContent = `Wood ${Math.floor(state.wood)} • Shards ${Math.floor(state.shards)} • Embers ${Math.floor(state.embers)}`;
+    }
+    renderCraftingScreen();
+    updateHUD();
+}
+
+function enterDeploymentHub() {
+    AudioManager.init();
+    refreshDailyChallenge();
+    refreshModeUI();
+    if (state.multiplayer.authoritative.active) {
+        endAuthoritativeSession('Returned to deployment hub.');
+    }
+
+    clearInterval(state.timers.phase);
+    clearEnemies();
+    clearFlares();
+    clearPulses();
+    clearTraps();
+    clearHazards();
+    clearProjectiles();
+    clearEmberOrbs();
+    clearAlliedSentinels();
+    resetDynamicWorld({
+        spawnResources: false,
+        spawnChests: false,
+        spawnBeacons: false
+    });
+
+    state.started = true;
+    resetRunSystems();
+    state.paused = false;
+    state.pauseReason = 'none';
+    state.phase = 'DEPLOY';
+    state.deployment.awaitingChoice = true;
+    state.activeChallengeId = '';
+    state.currentContract = null;
+    state.day = 1;
+    state.timeLeft = 0;
+    state.health = 100;
+    state.stamina = 100;
+    state.wood = 0;
+    state.shards = 0;
+    state.fireRadius = getMaxFireRadius() * 0.58;
+    state.keys = {};
+    state.touchInput.sprint = false;
+    if (state.touchInput.enabled) resetTouchMovement();
+
+    const hubX = CONFIG.DEPLOY_HUB_X;
+    const hubZ = CONFIG.DEPLOY_HUB_Z - 5.4;
+    const py = terrainHeight(hubX, hubZ) + CONFIG.PLAYER_HEIGHT * 0.5;
+    state.entities.player.position.set(hubX, py, hubZ);
+    state.entities.player.rotation.y = 0;
+    state.playerFacing = 0;
+    state.cameraHeading = 0;
+    state.cameraTarget.set(hubX, py + 1.65, hubZ);
+    world.camera.position.set(hubX, py + 10, hubZ - 12);
+    world.camera.lookAt(state.cameraTarget);
+    world.camera.fov = 62;
+    world.camera.updateProjectionMatrix();
+
+    if (ui.startScreen) ui.startScreen.classList.add('hidden');
+    if (ui.shopScreen) ui.shopScreen.classList.add('hidden');
+    if (ui.gameOverScreen) ui.gameOverScreen.classList.add('hidden');
+    if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
+    if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
+    if (ui.multiplayerScreen) ui.multiplayerScreen.classList.add('hidden');
+
+    pushFeed('Staging Nexus online. Step into Solo Rift to begin. With Others is coming soon.', 'info');
+    if (state.multiplayer.inRoom) {
+        const hostText = isMultiplayerHost() ? 'You are host.' : 'Host launches multiplayer runs.';
+        pushFeed(`Room ${state.multiplayer.roomCode} linked. ${hostText}`, 'info');
+    }
+    updateHUD();
+}
+
+function triggerWeatherControl() {
+    if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('weather');
+        return;
+    }
+    if (!hasGadget('weather_controller')) {
+        pushFeed('Build Weather Controller at crafting table first.', 'warn');
+        return;
+    }
+    if (state.weatherControlCooldown > 0) {
+        pushFeed(`Weather control recharging ${state.weatherControlCooldown.toFixed(1)}s.`, 'warn');
+        return;
+    }
+    if (state.shards < 2) {
+        pushFeed('Need 2 shards to trigger weather control.', 'warn');
+        return;
+    }
+
+    state.shards -= 2;
+    state.weatherControlCooldownMax = CONFIG.WEATHER_CONTROL_COOLDOWN;
+    state.weatherControlCooldown = state.weatherControlCooldownMax;
+    state.weather.targetRain *= 0.2;
+    state.weather.targetWind *= 0.4;
+    state.weather.targetFog = Math.max(0.002, state.weather.targetFog * 0.75);
+    state.weather.rain *= 0.45;
+    state.weather.wind *= 0.6;
+
+    pushFeed('Weather override active. Storm pressure dropping.', 'info');
+    spawnFloatingText('WEATHER CALMED', state.entities.player.position, '#8fe4ff');
+    triggerFlash('rgba(135, 230, 255, 0.28)', 0.16);
+    AudioManager.play('perk');
+    trackTelemetry('weather_control', { day: state.day });
+    updateHUD();
+}
+
+function isTouchDevice() {
+    return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+}
+
+function resetTouchMovement() {
+    state.touchInput.active = false;
+    state.touchInput.pointerId = -1;
+    state.touchInput.moveX = 0;
+    state.touchInput.moveY = 0;
+    if (ui.touchStick) {
+        ui.touchStick.style.transform = 'translate(-50%, -50%)';
+    }
+}
+
+function updateTouchControlsVisibility() {
+    if (!ui.touchControls) return;
+    const shouldShow = state.touchInput.enabled
+        && state.started
+        && state.phase !== 'GAME_OVER'
+        && !state.paused
+        && !isScreenVisible(ui.settingsScreen)
+        && !isScreenVisible(ui.guideScreen)
+        && !isScreenVisible(ui.craftingScreen)
+        && !isScreenVisible(ui.multiplayerScreen)
+        && !isScreenVisible(ui.shopScreen)
+        && !isScreenVisible(ui.perkScreen);
+    ui.touchControls.classList.toggle('hidden', !shouldShow);
+}
+
+function bindTouchActionButton(node, action, opts = {}) {
+    if (!node || typeof action !== 'function') return;
+    const repeatMs = Number(opts.repeatMs) || 0;
+    let repeatTimer = null;
+
+    const stopRepeat = () => {
+        if (repeatTimer !== null) {
+            clearInterval(repeatTimer);
+            repeatTimer = null;
+        }
+    };
+
+    node.addEventListener('pointerdown', (event) => {
+        if (!state.touchInput.enabled) return;
+        event.preventDefault();
+        node.setPointerCapture(event.pointerId);
+        action();
+        if (repeatMs > 0) {
+            stopRepeat();
+            repeatTimer = setInterval(() => {
+                if (!state.started || state.paused) return;
+                action();
+            }, repeatMs);
+        }
+    });
+
+    const release = () => stopRepeat();
+    node.addEventListener('pointerup', release);
+    node.addEventListener('pointercancel', release);
+    node.addEventListener('lostpointercapture', release);
+}
+
+function initTouchControls() {
+    state.touchInput.enabled = isTouchDevice();
+    document.body.classList.toggle('touch-mode', state.touchInput.enabled);
+    if (!state.touchInput.enabled || !ui.touchMovePad || !ui.touchStick) {
+        if (ui.touchControls) ui.touchControls.classList.add('hidden');
+        return;
+    }
+
+    const updateStickFromPointer = (clientX, clientY) => {
+        const rect = ui.touchMovePad.getBoundingClientRect();
+        const centerX = rect.left + rect.width * 0.5;
+        const centerY = rect.top + rect.height * 0.5;
+        const maxDist = rect.width * 0.36;
+        const dx = clientX - centerX;
+        const dy = clientY - centerY;
+        const dist = Math.hypot(dx, dy);
+        const scale = dist > maxDist ? maxDist / dist : 1;
+        const clampedX = dx * scale;
+        const clampedY = dy * scale;
+
+        const normX = clampedX / maxDist;
+        const normY = -(clampedY / maxDist);
+        const deadzone = CONFIG.TOUCH_DEADZONE;
+
+        state.touchInput.moveX = Math.abs(normX) < deadzone ? 0 : clamp(normX, -1, 1);
+        state.touchInput.moveY = Math.abs(normY) < deadzone ? 0 : clamp(normY, -1, 1);
+        ui.touchStick.style.transform = `translate(calc(-50% + ${clampedX.toFixed(1)}px), calc(-50% + ${clampedY.toFixed(1)}px))`;
+    };
+
+    ui.touchMovePad.addEventListener('pointerdown', (event) => {
+        if (!state.touchInput.enabled) return;
+        event.preventDefault();
+        state.touchInput.active = true;
+        state.touchInput.pointerId = event.pointerId;
+        ui.touchMovePad.setPointerCapture(event.pointerId);
+        updateStickFromPointer(event.clientX, event.clientY);
+    });
+
+    ui.touchMovePad.addEventListener('pointermove', (event) => {
+        if (!state.touchInput.enabled || !state.touchInput.active || event.pointerId !== state.touchInput.pointerId) return;
+        event.preventDefault();
+        updateStickFromPointer(event.clientX, event.clientY);
+    });
+
+    const clearStick = (event) => {
+        if (event && event.pointerId !== state.touchInput.pointerId) return;
+        resetTouchMovement();
+    };
+    ui.touchMovePad.addEventListener('pointerup', clearStick);
+    ui.touchMovePad.addEventListener('pointercancel', clearStick);
+    ui.touchMovePad.addEventListener('lostpointercapture', clearStick);
+
+    bindTouchActionButton(ui.touchDashBtn, performDash);
+    bindTouchActionButton(ui.touchPulseBtn, castPulseBlast);
+    bindTouchActionButton(ui.touchWeatherBtn, triggerWeatherControl);
+    bindTouchActionButton(ui.touchInteractBtn, interact);
+    bindTouchActionButton(ui.touchShootBtn, fireBolt, { repeatMs: 170 });
+
+    if (ui.touchSprintBtn) {
+        const setSprint = (active) => {
+            state.touchInput.sprint = active;
+            ui.touchSprintBtn.classList.toggle('active', active);
+        };
+        ui.touchSprintBtn.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            ui.touchSprintBtn.setPointerCapture(event.pointerId);
+            setSprint(true);
+        });
+        const releaseSprint = () => setSprint(false);
+        ui.touchSprintBtn.addEventListener('pointerup', releaseSprint);
+        ui.touchSprintBtn.addEventListener('pointercancel', releaseSprint);
+        ui.touchSprintBtn.addEventListener('lostpointercapture', releaseSprint);
+    }
+
+    updateTouchControlsVisibility();
+}
+
+function initMultiplayer() {
+    if (!isMultiplayerEnabled()) {
+        state.multiplayer.supported = false;
+        if (ui.openMultiplayerBtn) {
+            ui.openMultiplayerBtn.disabled = true;
+            ui.openMultiplayerBtn.title = 'Multiplayer coming soon';
+        }
+        setMultiplayerStatus(MULTIPLAYER_DISABLED_MESSAGE, 'warn');
+        renderMultiplayerRoster();
+        updateMultiplayerRoomUI();
+        return;
+    }
+
+    if (ui.openMultiplayerBtn) {
+        ui.openMultiplayerBtn.disabled = false;
+        ui.openMultiplayerBtn.removeAttribute('title');
+    }
+
+    state.multiplayer.supported = typeof window !== 'undefined' && typeof window.io === 'function';
+    state.multiplayer.name = getStoredMultiplayerName();
+    state.multiplayer.clientId = getStoredMultiplayerClientId();
+    state.multiplayer.serverUrl = getConfiguredMultiplayerServerUrl();
+
+    if (ui.mpNameInput) {
+        ui.mpNameInput.value = state.multiplayer.name;
+    }
+    if (ui.mpRoomInput) {
+        ui.mpRoomInput.addEventListener('input', () => {
+            ui.mpRoomInput.value = String(ui.mpRoomInput.value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+        });
+    }
+    renderMultiplayerRoster();
+    updateMultiplayerRoomUI();
+
+    if (!state.multiplayer.supported) {
+        setMultiplayerStatus('Multiplayer service unavailable on this host. Run via node server.', 'warn');
+    } else {
+        setMultiplayerStatus('Ready. Create or join a room.', 'info');
+    }
+}
+
+function updateMultiplayerRoomUI() {
+    if (!isMultiplayerEnabled()) {
+        if (ui.mpRoomDisplay) ui.mpRoomDisplay.textContent = '-';
+        if (ui.mpCreateBtn) ui.mpCreateBtn.disabled = true;
+        if (ui.mpJoinBtn) ui.mpJoinBtn.disabled = true;
+        if (ui.mpLeaveBtn) ui.mpLeaveBtn.disabled = true;
+        if (ui.mpCopyCodeBtn) ui.mpCopyCodeBtn.disabled = true;
+        if (ui.mpStartBtn) ui.mpStartBtn.disabled = true;
+        if (ui.mpStartHint) ui.mpStartHint.textContent = 'Multiplayer is disabled for now. Coming soon.';
+        return;
+    }
+
+    const players = Array.isArray(state.multiplayer.players) ? state.multiplayer.players : [];
+    const connected = !!state.multiplayer.connected;
+    const inRoom = !!state.multiplayer.inRoom;
+    const host = isMultiplayerHost();
+    const enoughPlayers = players.length >= 2;
+
+    if (ui.mpRoomDisplay) {
+        ui.mpRoomDisplay.textContent = state.multiplayer.inRoom ? state.multiplayer.roomCode : '-';
+    }
+    if (ui.mpLeaveBtn) {
+        ui.mpLeaveBtn.disabled = !state.multiplayer.inRoom;
+    }
+    if (ui.mpCopyCodeBtn) {
+        ui.mpCopyCodeBtn.disabled = !state.multiplayer.inRoom;
+    }
+    if (ui.mpStartBtn) {
+        ui.mpStartBtn.disabled = !(connected && inRoom && host && enoughPlayers);
+    }
+    if (ui.mpStartHint) {
+        if (!connected) {
+            ui.mpStartHint.textContent = 'Connect to multiplayer service first.';
+        } else if (!inRoom) {
+            ui.mpStartHint.textContent = 'Create or join a room first.';
+        } else if (!host) {
+            ui.mpStartHint.textContent = 'Only the host can start. Wait for HOST launch.';
+        } else if (!enoughPlayers) {
+            ui.mpStartHint.textContent = 'Need at least 2 players in room to start.';
+        } else {
+            ui.mpStartHint.textContent = 'Ready: click Start Co-op (Host) to launch for everyone.';
+        }
+    }
+}
+
+function renderMultiplayerRoster() {
+    if (!ui.mpRoster) return;
+    ui.mpRoster.innerHTML = '';
+
+    const players = Array.isArray(state.multiplayer.players) ? state.multiplayer.players : [];
+    if (!state.multiplayer.inRoom || players.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'roster-empty';
+        empty.textContent = 'No players in room.';
+        ui.mpRoster.appendChild(empty);
+        return;
+    }
+
+    players.forEach((player) => {
+        const row = document.createElement('div');
+        row.className = `roster-row${player.id === state.multiplayer.playerId ? ' self' : ''}`;
+
+        const name = document.createElement('span');
+        name.className = 'roster-name';
+        const isHost = player.id === state.multiplayer.hostId;
+        const isSelf = player.id === state.multiplayer.playerId;
+        name.textContent = `${player.name}${isSelf ? ' (You)' : ''}`;
+
+        const meta = document.createElement('span');
+        meta.className = 'roster-meta';
+        meta.textContent = isHost ? 'HOST' : 'MEMBER';
+
+        row.appendChild(name);
+        row.appendChild(meta);
+        ui.mpRoster.appendChild(row);
+    });
+}
+
+function openMultiplayerScreen() {
+    if (!ui.multiplayerScreen) return;
+    if (!isMultiplayerEnabled()) {
+        notifyMultiplayerDisabled();
+        return;
+    }
+    if (state.multiplayer.supported) ensureMultiplayerSocket();
+    if (ui.startScreen && (!state.started || state.phase === 'GAME_OVER')) {
+        ui.startScreen.classList.add('hidden');
+    }
+    ui.multiplayerScreen.classList.remove('hidden');
+    if (ui.mpNameInput) {
+        ui.mpNameInput.value = state.multiplayer.name || getStoredMultiplayerName();
+        ui.mpNameInput.focus();
+        ui.mpNameInput.select();
+    }
+    updateMultiplayerRoomUI();
+    renderMultiplayerRoster();
+}
+
+function closeMultiplayerScreen() {
+    if (!ui.multiplayerScreen) return;
+    ui.multiplayerScreen.classList.add('hidden');
+    if (ui.startScreen && (!state.started || state.phase === 'GAME_OVER')) {
+        ui.startScreen.classList.remove('hidden');
+    }
+}
+
+function getMultiplayerProfileFromUI() {
+    const name = sanitizePlayerName(ui.mpNameInput ? ui.mpNameInput.value : state.multiplayer.name);
+    state.multiplayer.name = name;
+    saveStoredMultiplayerName(name);
+    return {
+        name,
+        skin: state.equippedSkin,
+        clientId: state.multiplayer.clientId
+    };
+}
+
+function ensureMultiplayerSocket() {
+    if (!isMultiplayerEnabled()) {
+        notifyMultiplayerDisabled();
+        return false;
+    }
+    if (!state.multiplayer.supported) {
+        setMultiplayerStatus('Socket client missing. Use npm start server for multiplayer.', 'warn');
+        return false;
+    }
+    if (state.multiplayer.socket) return true;
+
+    if (!state.multiplayer.serverUrl) {
+        state.multiplayer.serverUrl = getConfiguredMultiplayerServerUrl();
+    }
+    const socketTarget = state.multiplayer.serverUrl;
+    const socketOpts = {
+        transports: ['websocket'],
+        reconnection: true,
+        timeout: 12000
+    };
+    const socket = socketTarget
+        ? window.io(socketTarget, socketOpts)
+        : window.io(socketOpts);
+    state.multiplayer.socket = socket;
+    state.multiplayer.connecting = true;
+    const targetLabel = socketTarget || 'same origin';
+    setMultiplayerStatus(`Connecting to multiplayer service (${targetLabel})...`);
+
+    socket.on('connect', () => {
+        state.multiplayer.connected = true;
+        state.multiplayer.connecting = false;
+        state.multiplayer.playerId = socket.id || '';
+        setMultiplayerStatus('Connected. Create or join a room.');
+        updateMultiplayerRoomUI();
+
+        if (!state.multiplayer.inRoom && state.multiplayer.lastRoomCode) {
+            const profile = getMultiplayerProfileFromUI();
+            socket.emit('lobby:join', {
+                roomCode: state.multiplayer.lastRoomCode,
+                name: profile.name,
+                skin: profile.skin,
+                clientId: profile.clientId
+            });
+            setMultiplayerStatus(`Rejoining room ${state.multiplayer.lastRoomCode}...`);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        state.multiplayer.connected = false;
+        state.multiplayer.connecting = false;
+        state.multiplayer.inRoom = false;
+        state.multiplayer.roomCode = '';
+        state.multiplayer.hostId = '';
+        state.multiplayer.players = [];
+        state.multiplayer.pingMs = 0;
+        setMultiplayerStatus('Disconnected from multiplayer service.', 'warn');
+        if (state.multiplayer.authoritative.active) {
+            endAuthoritativeSession('Connection lost. Authoritative session closed.');
+        }
+        clearRemotePlayers();
+        updateMultiplayerRoomUI();
+        renderMultiplayerRoster();
+    });
+
+    socket.on('connect_error', () => {
+        state.multiplayer.connected = false;
+        state.multiplayer.connecting = false;
+        setMultiplayerStatus('Multiplayer connection failed. Check server.', 'danger');
+    });
+
+    socket.on('lobby:error', (payload = {}) => {
+        const message = String(payload.message || 'Lobby error.');
+        setMultiplayerStatus(message, 'danger');
+        pushFeed(message, 'warn');
+    });
+
+    socket.on('lobby:joined', (payload = {}) => {
+        applyLobbySnapshot(payload, true);
+    });
+
+    socket.on('lobby:updated', (payload = {}) => {
+        applyLobbySnapshot(payload, false);
+    });
+
+    socket.on('lobby:left', () => {
+        clearLobbyState({ clearResume: true });
+    });
+
+    socket.on('player:left', (payload = {}) => {
+        const id = payload.id || '';
+        if (id) removeRemotePlayer(id);
+    });
+
+    socket.on('player:state', (payload = {}) => {
+        applyRemotePlayerState(payload);
+    });
+
+    socket.on('game:start', (payload = {}) => {
+        handleNetworkGameStart(payload);
+    });
+
+    socket.on('game:snapshot', (payload = {}) => {
+        applyAuthoritativeSnapshot(payload);
+    });
+
+    socket.on('game:ended', (payload = {}) => {
+        handleAuthoritativeGameEnded(payload);
+    });
+
+    socket.on('game:notice', (payload = {}) => {
+        const message = String(payload.message || '').trim();
+        if (message) pushFeed(message, 'warn');
+    });
+
+    return true;
+}
+
+function clearLobbyState(opts = {}) {
+    if (state.multiplayer.authoritative.active) {
+        endAuthoritativeSession('Left multiplayer room.');
+        clearInterval(state.timers.phase);
+        state.started = false;
+        state.phase = 'GAME_OVER';
+        state.paused = false;
+        state.pauseReason = 'none';
+        if (ui.startScreen) ui.startScreen.classList.remove('hidden');
+        if (ui.multiplayerScreen) ui.multiplayerScreen.classList.add('hidden');
+        updateHUD();
+    }
+    state.multiplayer.inRoom = false;
+    state.multiplayer.roomCode = '';
+    if (opts.clearResume) state.multiplayer.lastRoomCode = '';
+    state.multiplayer.hostId = '';
+    state.multiplayer.players = [];
+    state.multiplayer.sendAccumulator = 0;
+    state.multiplayer.pingMs = 0;
+    clearRemotePlayers();
+    updateMultiplayerRoomUI();
+    renderMultiplayerRoster();
+    setMultiplayerStatus(state.multiplayer.connected
+        ? 'Room closed. Create or join another room.'
+        : 'Disconnected from multiplayer service.', state.multiplayer.connected ? '' : 'warn');
+}
+
+function applyLobbySnapshot(payload = {}, joined = false) {
+    const roomCode = String(payload.roomCode || '').toUpperCase().trim();
+    if (!roomCode) return;
+    state.multiplayer.inRoom = true;
+    state.multiplayer.roomCode = roomCode;
+    state.multiplayer.lastRoomCode = roomCode;
+    state.multiplayer.hostId = String(payload.hostId || '');
+    state.multiplayer.players = Array.isArray(payload.players)
+        ? payload.players.map((entry) => ({
+            id: String(entry.id || ''),
+            name: sanitizePlayerName(entry.name || 'Ranger'),
+            skin: String(entry.skin || 'standard')
+        }))
+        : [];
+
+    if (ui.mpRoomInput) ui.mpRoomInput.value = roomCode;
+    const hostName = (state.multiplayer.players.find((p) => p.id === state.multiplayer.hostId) || {}).name || 'Unknown';
+    setMultiplayerStatus(`Room ${roomCode} linked. Host: ${hostName}.`);
+    updateMultiplayerRoomUI();
+    renderMultiplayerRoster();
+    syncRemotePlayersFromRoster();
+
+    if (joined) {
+        pushFeed(`Joined room ${roomCode}.`, 'info');
+    }
+}
+
+function createMultiplayerRoom() {
+    const socketReady = ensureMultiplayerSocket();
+    if (!socketReady || !state.multiplayer.socket) return;
+    const profile = getMultiplayerProfileFromUI();
+    setMultiplayerStatus('Creating room...');
+    state.multiplayer.socket.emit('lobby:create', profile);
+}
+
+function startMultiplayerFromLobby() {
+    const launched = requestNetworkRunStart();
+    if (launched) {
+        closeMultiplayerScreen();
+    }
+}
+
+function joinMultiplayerRoom() {
+    const socketReady = ensureMultiplayerSocket();
+    if (!socketReady || !state.multiplayer.socket) return;
+    const roomCode = String(ui.mpRoomInput ? ui.mpRoomInput.value : '').toUpperCase().trim();
+    if (!roomCode) {
+        setMultiplayerStatus('Enter a room code to join.', 'warn');
+        return;
+    }
+    const profile = getMultiplayerProfileFromUI();
+    setMultiplayerStatus(`Joining room ${roomCode}...`);
+    state.multiplayer.socket.emit('lobby:join', {
+        roomCode,
+        name: profile.name,
+        skin: profile.skin,
+        clientId: profile.clientId
+    });
+}
+
+function leaveMultiplayerRoom() {
+    if (state.multiplayer.socket && state.multiplayer.connected && state.multiplayer.inRoom) {
+        state.multiplayer.socket.emit('lobby:leave');
+    }
+    clearLobbyState({ clearResume: true });
+}
+
+function updateMultiplayerProfile() {
+    if (!state.multiplayer.socket || !state.multiplayer.connected || !state.multiplayer.inRoom) return;
+    const profile = {
+        name: sanitizePlayerName(state.multiplayer.name || (ui.mpNameInput ? ui.mpNameInput.value : 'Ranger')),
+        skin: state.equippedSkin,
+        clientId: state.multiplayer.clientId
+    };
+    state.multiplayer.socket.emit('lobby:update-profile', profile);
+}
+
+function applyAuthoritativeSnapshot(payload = {}) {
+    if (!payload || !payload.authoritative) return;
+    if (!state.multiplayer.inRoom || payload.roomCode !== state.multiplayer.roomCode) return;
+
+    if (!state.multiplayer.authoritative.active) {
+        beginAuthoritativeCoopRun({
+            selectedMode: state.selectedMode,
+            selectedDifficulty: state.selectedDifficulty,
+            seed: payload.seed || ''
+        });
+    }
+
+    const prevPhase = state.phase;
+    state.phase = payload.phase || state.phase;
+    state.day = Number(payload.day) || state.day;
+    state.timeLeft = Number(payload.timeLeft) || 0;
+    state.fireRadius = clamp(Number(payload.fireRadius) || state.fireRadius, 0, getMaxFireRadius());
+    if (state.phase !== prevPhase) {
+        setWeatherTargets();
+    }
+
+    if (payload.director && typeof payload.director === 'object') {
+        state.director.intensity = Number(payload.director.intensity) || state.director.intensity;
+        state.director.target = Number(payload.director.target) || state.director.target;
+        state.director.wavesSpawned = Number(payload.director.wavesSpawned) || state.director.wavesSpawned;
+    }
+
+    if (payload.nightEvent && typeof payload.nightEvent === 'object') {
+        const n = payload.nightEvent;
+        state.nightEvent.triggerTimer = Number(n.triggerTimer) || 0;
+        state.nightEvent.active = !!n.active;
+        state.nightEvent.resolved = !!n.resolved;
+        state.nightEvent.kind = String(n.kind || '');
+        state.nightEvent.label = String(n.label || '');
+        state.nightEvent.timer = Number(n.timer) || 0;
+        state.nightEvent.duration = Number(n.duration) || 0;
+        state.nightEvent.goal = Number(n.goal) || 0;
+        state.nightEvent.progress = Number(n.progress) || 0;
+        state.nightEvent.reward = Number(n.reward) || 0;
+        state.nightEvent.outcome = String(n.outcome || 'none');
+        state.nightEvent.completedCount = Number(n.completedCount) || state.nightEvent.completedCount;
+        state.nightEvent.failedCount = Number(n.failedCount) || state.nightEvent.failedCount;
+    }
+
+    if (payload.nemesis && payload.nemesis.profile) {
+        const p = payload.nemesis.profile;
+        state.nemesisProfile.name = String(p.name || state.nemesisProfile.name);
+        state.nemesisProfile.rank = Number(p.rank) || state.nemesisProfile.rank;
+        state.nemesisProfile.rage = Number(p.rage) || 0;
+        state.nemesisProfile.bounty = Number(p.bounty) || 0;
+        state.nemesisProfile.kills = Number(p.kills) || 0;
+        state.nemesisProfile.encounters = Number(p.encounters) || 0;
+        state.nemesisProfile.lastOutcome = String(p.lastOutcome || 'none');
+        state.nemesisProfile.lastSeenDay = Number(p.lastSeenDay) || 0;
+    }
+    if (payload.nemesis && payload.nemesis.runtime) {
+        const r = payload.nemesis.runtime;
+        state.nemesisRuntime.spawnTimer = Number(r.spawnTimer) || 0;
+        state.nemesisRuntime.spawned = !!r.spawned;
+        state.nemesisRuntime.resolved = !!r.resolved;
+        state.nemesisRuntime.killed = !!r.killed;
+    }
+
+    const players = Array.isArray(payload.players) ? payload.players : [];
+    const selfId = state.multiplayer.playerId;
+    const seenRemote = new Set();
+
+    for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+        const id = String(p.id || '');
+        if (!id) continue;
+
+        if (id === selfId) {
+            const x = Number(p.x) || 0;
+            const y = Number(p.y) || (terrainHeight(x, Number(p.z) || 0) + CONFIG.PLAYER_HEIGHT * 0.5);
+            const z = Number(p.z) || 0;
+            state.multiplayer.authoritative.localTargetPos.set(x, y, z);
+            state.multiplayer.authoritative.localTargetRot = Number(p.rot) || state.playerFacing;
+            state.health = clamp(Number(p.health) || state.health, 0, 100);
+            state.wood = Math.max(0, Math.floor(Number(p.wood) || 0));
+            state.shards = Math.max(0, Math.floor(Number(p.shards) || 0));
+            state.embers = Math.max(0, Math.floor(Number(p.embers) || state.embers));
+            state.score = Math.max(0, Number(p.score) || state.score);
+            state.multiplayer.pingMs = Math.max(0, Math.floor(Number(p.pingMs) || 0));
+
+            if (p.cooldowns && typeof p.cooldowns === 'object') {
+                const caps = payload.cooldownCaps || {};
+                state.dashCooldown = Math.max(0, Number(p.cooldowns.dash) || 0);
+                state.pulseCooldown = Math.max(0, Number(p.cooldowns.pulse) || 0);
+                state.boltCooldown = Math.max(0, Number(p.cooldowns.shoot) || 0);
+                state.weatherControlCooldown = Math.max(0, Number(p.cooldowns.weather) || 0);
+                state.dashCooldownMax = Math.max(0.001, Number(caps.dash) || state.dashCooldownMax);
+                state.pulseCooldownMax = Math.max(0.001, Number(caps.pulse) || state.pulseCooldownMax);
+                state.boltCooldownMax = Math.max(0.001, Number(caps.shoot) || state.boltCooldownMax);
+                state.weatherControlCooldownMax = Math.max(0.001, Number(caps.weather) || state.weatherControlCooldownMax);
+            }
+            continue;
+        }
+
+        seenRemote.add(id);
+        if (!state.entities.remotePlayers[id]) {
+            createRemotePlayer({
+                id,
+                name: p.name || 'Ranger',
+                skin: p.skin || 'standard'
+            });
+        } else {
+            updateRemotePlayerVisual(id, {
+                name: p.name || 'Ranger',
+                skin: p.skin || 'standard'
+            });
+        }
+
+        applyRemotePlayerState({
+            id,
+            state: {
+                x: Number(p.x) || 0,
+                y: Number(p.y) || terrainHeight(Number(p.x) || 0, Number(p.z) || 0) + CONFIG.PLAYER_HEIGHT * 0.5,
+                z: Number(p.z) || 0,
+                rot: Number(p.rot) || 0,
+                skin: p.skin || 'standard'
+            }
+        });
+    }
+
+    Object.keys(state.entities.remotePlayers).forEach((id) => {
+        if (!seenRemote.has(id)) removeRemotePlayer(id);
+    });
+
+    if (payload.resources && typeof payload.resources === 'object') {
+        const resources = payload.resources;
+        if (Array.isArray(resources.wood)) {
+            syncAuthoritativeResourceCollection('wood', resources.wood);
+        }
+        if (Array.isArray(resources.shards)) {
+            syncAuthoritativeResourceCollection('shards', resources.shards);
+        }
+    }
+    if (Array.isArray(payload.chests)) {
+        syncAuthoritativeChests(payload.chests);
+    }
+    syncAuthoritativeEnemies(Array.isArray(payload.enemies) ? payload.enemies : []);
+    syncAuthoritativeTraps(Array.isArray(payload.traps) ? payload.traps : []);
+    syncAuthoritativeFlares(Array.isArray(payload.flares) ? payload.flares : []);
+    rebuildAuthoritativeMirrorArrays();
+}
+
+function handleAuthoritativeGameEnded(payload = {}) {
+    if (!state.multiplayer.authoritative.active) return;
+    const reason = String(payload.reason || 'Authoritative session ended.');
+    endAuthoritativeSession(reason);
+    endGame(reason, {
+        title: 'TEAM EXTINGUISHED',
+        message: `${reason} Survived ${Math.max(1, Number(payload.day) || state.day)} day(s) in co-op.`,
+        skipBasePayout: true,
+        customPayout: 0,
+        endType: 'defeat',
+        feedKind: 'danger',
+        feedText: reason
+    });
+}
+
+function copyMultiplayerCode() {
+    if (!state.multiplayer.inRoom || !state.multiplayer.roomCode) return;
+    const code = state.multiplayer.roomCode;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(() => {
+            pushFeed(`Room code copied: ${code}`, 'info');
+        }).catch(() => {
+            pushFeed(`Room code: ${code}`, 'info');
+        });
+        return;
+    }
+    pushFeed(`Room code: ${code}`, 'info');
+}
+
+function getPlayerColorFromSkin(skinId) {
+    const skin = SKINS[skinId] || SKINS.standard;
+    return {
+        color: skin.color,
+        emissive: skin.emissive
+    };
+}
+
+function createNameTagSprite(text) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(8, 12, 18, 0.74)';
+    ctx.fillRect(24, 34, 464, 60);
+    ctx.strokeStyle = 'rgba(161, 208, 255, 0.82)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(24, 34, 464, 60);
+    ctx.font = '700 44px Outfit, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#e4f3ff';
+    ctx.fillText(sanitizePlayerName(text), 256, 64);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(3.8, 0.95, 1);
+    sprite.position.set(0, 2.7, 0);
+    return { sprite, texture, material };
+}
+
+function createRemotePlayer(playerData) {
+    const player = {
+        id: playerData.id,
+        name: sanitizePlayerName(playerData.name || 'Ranger'),
+        skin: String(playerData.skin || 'standard')
+    };
+    const colors = getPlayerColorFromSkin(player.skin);
+
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({
+        color: colors.color,
+        emissive: colors.emissive,
+        emissiveIntensity: 0.65,
+        roughness: 0.36,
+        metalness: 0.28
+    });
+    const coreMat = new THREE.MeshStandardMaterial({
+        color: 0xffd58d,
+        emissive: 0xff7a2e,
+        emissiveIntensity: 1.2,
+        roughness: 0.16,
+        metalness: 0.5
+    });
+
+    const torso = new THREE.Mesh(
+        THREE.CapsuleGeometry
+            ? new THREE.CapsuleGeometry(0.34, 1.12, 6, 10)
+            : new THREE.CylinderGeometry(0.34, 0.34, 1.58, 12),
+        bodyMat
+    );
+    torso.position.y = 0.38;
+    torso.castShadow = true;
+    torso.receiveShadow = true;
+    group.add(torso);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 12), bodyMat);
+    head.position.y = 1.48;
+    head.castShadow = true;
+    head.receiveShadow = true;
+    group.add(head);
+
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.2, 12), coreMat);
+    core.rotation.x = Math.PI * 0.5;
+    core.position.set(0, 0.56, 0.36);
+    core.castShadow = true;
+    group.add(core);
+
+    const tag = createNameTagSprite(player.name);
+    group.add(tag.sprite);
+
+    const y = terrainHeight(0, 0) + CONFIG.PLAYER_HEIGHT * 0.5;
+    group.position.set(0, y, 8);
+    group.rotation.y = 0;
+    world.scene.add(group);
+
+    state.entities.remotePlayers[player.id] = {
+        id: player.id,
+        name: player.name,
+        skin: player.skin,
+        mesh: group,
+        torso,
+        core,
+        bodyMat,
+        coreMat,
+        labelSprite: tag.sprite,
+        labelTexture: tag.texture,
+        labelMaterial: tag.material,
+        targetPos: new THREE.Vector3(group.position.x, group.position.y, group.position.z),
+        velocity: new THREE.Vector3(),
+        targetRot: 0,
+        lastSeen: performance.now(),
+        lastStateAt: 0,
+        seenState: false
+    };
+}
+
+function updateRemotePlayerVisual(id, playerData) {
+    const remote = state.entities.remotePlayers[id];
+    if (!remote) return;
+    const previousName = remote.name;
+    const previousSkin = remote.skin;
+    const name = sanitizePlayerName(playerData.name || remote.name || 'Ranger');
+    const skin = String(playerData.skin || remote.skin || 'standard');
+    remote.name = name;
+    if (skin !== remote.skin) {
+        remote.skin = skin;
+        const colors = getPlayerColorFromSkin(skin);
+        remote.bodyMat.color.setHex(colors.color);
+        remote.bodyMat.emissive.setHex(colors.emissive);
+    }
+
+    if (name === previousName && skin === previousSkin) return;
+    if (remote.labelSprite) remote.mesh.remove(remote.labelSprite);
+    if (remote.labelTexture) remote.labelTexture.dispose();
+    if (remote.labelMaterial) remote.labelMaterial.dispose();
+    const nextTag = createNameTagSprite(name);
+    remote.labelSprite = nextTag.sprite;
+    remote.labelTexture = nextTag.texture;
+    remote.labelMaterial = nextTag.material;
+    remote.mesh.add(nextTag.sprite);
+}
+
+function removeRemotePlayer(id) {
+    const remote = state.entities.remotePlayers[id];
+    if (!remote) return;
+    if (remote.mesh && remote.mesh.traverse) {
+        remote.mesh.traverse((node) => {
+            if (node && node.isMesh && node.geometry) node.geometry.dispose();
+        });
+    }
+    if (remote.labelTexture) remote.labelTexture.dispose();
+    if (remote.labelMaterial) remote.labelMaterial.dispose();
+    if (remote.bodyMat) remote.bodyMat.dispose();
+    if (remote.coreMat) remote.coreMat.dispose();
+    if (remote.mesh && remote.mesh.parent) {
+        remote.mesh.parent.remove(remote.mesh);
+    }
+    delete state.entities.remotePlayers[id];
+}
+
+function clearRemotePlayers() {
+    const ids = Object.keys(state.entities.remotePlayers);
+    for (let i = 0; i < ids.length; i++) {
+        removeRemotePlayer(ids[i]);
+    }
+}
+
+function syncRemotePlayersFromRoster() {
+    if (!state.multiplayer.inRoom) {
+        clearRemotePlayers();
+        return;
+    }
+
+    const active = new Set();
+    const players = Array.isArray(state.multiplayer.players) ? state.multiplayer.players : [];
+    for (let i = 0; i < players.length; i++) {
+        const player = players[i];
+        if (!player.id || player.id === state.multiplayer.playerId) continue;
+        active.add(player.id);
+        if (!state.entities.remotePlayers[player.id]) {
+            createRemotePlayer(player);
+        } else {
+            updateRemotePlayerVisual(player.id, player);
+        }
+    }
+
+    Object.keys(state.entities.remotePlayers).forEach((id) => {
+        if (!active.has(id)) removeRemotePlayer(id);
+    });
+}
+
+function applyRemotePlayerState(payload = {}) {
+    if (!state.multiplayer.inRoom || !state.multiplayer.connected) return;
+    const id = String(payload.id || '');
+    if (!id || id === state.multiplayer.playerId) return;
+    const snapshot = payload.state || {};
+    const x = Number(snapshot.x);
+    const y = Number(snapshot.y);
+    const z = Number(snapshot.z);
+    const rot = Number(snapshot.rot);
+    if (![x, y, z, rot].every(Number.isFinite)) return;
+
+    if (!state.entities.remotePlayers[id]) {
+        const rosterPlayer = (state.multiplayer.players || []).find((p) => p.id === id)
+            || { id, name: 'Ranger', skin: snapshot.skin || 'standard' };
+        createRemotePlayer(rosterPlayer);
+    }
+    const remote = state.entities.remotePlayers[id];
+    if (!remote) return;
+    if (snapshot.skin && snapshot.skin !== remote.skin) {
+        updateRemotePlayerVisual(id, { skin: snapshot.skin, name: remote.name });
+    }
+
+    const now = performance.now();
+    if (remote.lastStateAt > 0) {
+        const dtSec = clamp((now - remote.lastStateAt) / 1000, 0.016, 0.35);
+        remote.velocity.set(
+            (x - remote.targetPos.x) / dtSec,
+            (y - remote.targetPos.y) / dtSec,
+            (z - remote.targetPos.z) / dtSec
+        );
+    } else {
+        remote.velocity.set(0, 0, 0);
+    }
+    remote.targetPos.set(x, y, z);
+    remote.targetRot = rot;
+    remote.lastSeen = now;
+    remote.lastStateAt = now;
+    remote.seenState = true;
+}
+
+function updateRemotePlayers(dt) {
+    const ids = Object.keys(state.entities.remotePlayers);
+    if (ids.length === 0) return;
+    const now = performance.now();
+    const posLerp = 1 - Math.exp(-dt * CONFIG.MULTIPLAYER_REMOTE_POS_INTERP);
+    const rotLerp = 1 - Math.exp(-dt * CONFIG.MULTIPLAYER_REMOTE_ROT_INTERP);
+    const extrapMaxSec = CONFIG.MULTIPLAYER_REMOTE_EXTRAP_MS / 1000;
+
+    for (let i = 0; i < ids.length; i++) {
+        const remote = state.entities.remotePlayers[ids[i]];
+        if (!remote || !remote.mesh) continue;
+
+        if (remote.seenState && (now - remote.lastSeen > CONFIG.MULTIPLAYER_REMOTE_TIMEOUT * 1000)) {
+            removeRemotePlayer(remote.id);
+            continue;
+        }
+
+        const extrapSec = remote.lastStateAt > 0
+            ? clamp((now - remote.lastStateAt) / 1000, 0, extrapMaxSec)
+            : 0;
+        TMP.remotePredPos.copy(remote.targetPos).addScaledVector(remote.velocity, extrapSec);
+        remote.mesh.position.lerp(TMP.remotePredPos, posLerp);
+        remote.mesh.rotation.y = lerpAngle(remote.mesh.rotation.y, remote.targetRot, rotLerp);
+        if (remote.coreMat) {
+            remote.coreMat.emissiveIntensity = 0.88 + Math.sin(world.time * 6 + i) * 0.28;
+        }
+    }
+}
+
+function emitMultiplayerState(dt) {
+    if (!state.multiplayer.socket || !state.multiplayer.connected || !state.multiplayer.inRoom) return;
+    if (!state.started || state.phase === 'GAME_OVER' || !state.entities.player) return;
+
+    if (isAuthoritativeCoopActive()) {
+        const move = getMovementDirection();
+        const moveLen = Math.hypot(move.x, move.z);
+        const mx = moveLen > 0.001 ? move.x / moveLen : 0;
+        const mz = moveLen > 0.001 ? move.z / moveLen : 0;
+        const sprinting = !!(state.keys.shift || state.keys.shiftleft || state.keys.shiftright || state.touchInput.sprint);
+
+        const queue = state.multiplayer.authoritative.actionQueue;
+        const hasPendingActions = !!(queue.interact || queue.pulse || queue.shoot || queue.dash || queue.weather || queue.trap || queue.flare || queue.craft);
+        const idleInterval = CONFIG.MULTIPLAYER_IDLE_SEND_INTERVAL;
+        const sendInterval = (moveLen < 0.001 && !sprinting && !hasPendingActions)
+            ? idleInterval
+            : CONFIG.MULTIPLAYER_SEND_INTERVAL;
+
+        state.multiplayer.sendAccumulator += dt;
+        if (state.multiplayer.sendAccumulator < sendInterval) return;
+        state.multiplayer.sendAccumulator = 0;
+
+        state.multiplayer.inputSeq += 1;
+
+        state.multiplayer.socket.emit('player:input', {
+            mx: netRound(mx, 4),
+            mz: netRound(mz, 4),
+            sprint: sprinting,
+            look: netRound(state.playerFacing, 4),
+            seq: state.multiplayer.inputSeq,
+            sentAt: Date.now(),
+            actions: takeAuthoritativeActions()
+        });
+        return;
+    }
+
+    state.multiplayer.sendAccumulator += dt;
+    if (state.multiplayer.sendAccumulator < CONFIG.MULTIPLAYER_SEND_INTERVAL) return;
+    state.multiplayer.sendAccumulator = 0;
+
+    const p = state.entities.player.position;
+    state.multiplayer.socket.emit('player:state', {
+        x: netRound(p.x),
+        y: netRound(p.y),
+        z: netRound(p.z),
+        rot: netRound(state.playerFacing),
+        phase: state.phase,
+        day: state.day,
+        health: netRound(state.health, 1),
+        skin: state.equippedSkin,
+        partyMode: state.partyMode
+    });
+}
+
+function requestNetworkRunStart() {
+    if (!isMultiplayerEnabled()) {
+        notifyMultiplayerDisabled();
+        return false;
+    }
+    if (!state.multiplayer.socket || !state.multiplayer.connected || !state.multiplayer.inRoom) {
+        openMultiplayerScreen();
+        setMultiplayerStatus('Join a multiplayer room before entering With Others.', 'warn');
+        return false;
+    }
+    if (!isMultiplayerHost()) {
+        pushFeed('Host launches the multiplayer run.', 'warn');
+        return false;
+    }
+    if (!Array.isArray(state.multiplayer.players) || state.multiplayer.players.length < 2) {
+        pushFeed('Need at least 2 players in room for co-op launch.', 'warn');
+        return false;
+    }
+
+    updateMultiplayerProfile();
+    state.multiplayer.socket.emit('game:start-request', {
+        partyMode: 'allies',
+        selectedMode: state.selectedMode,
+        selectedDifficulty: state.selectedDifficulty,
+        authoritative: true
+    });
+    setMultiplayerStatus('Launching multiplayer run...');
+    return true;
+}
+
+function handleNetworkGameStart(payload = {}) {
+    if (!isMultiplayerEnabled()) return;
+    if (!payload || payload.partyMode !== 'allies') return;
+    if (!state.multiplayer.inRoom || payload.roomCode !== state.multiplayer.roomCode) return;
+
+    setSelectedMode(payload.selectedMode, { silent: true, force: true });
+    if (payload.selectedMode !== 'daily') {
+        state.selectedDifficulty = ['easy', 'normal', 'hard'].includes(payload.selectedDifficulty)
+            ? payload.selectedDifficulty
+            : state.selectedDifficulty;
+        syncDifficultyButtons();
+    }
+
+    const starter = (state.multiplayer.players || []).find((p) => p.id === payload.by);
+    if (starter) {
+        pushFeed(`Multiplayer launch by ${starter.name}.`, 'info');
+    } else {
+        pushFeed('Multiplayer launch confirmed.', 'info');
+    }
+
+    if (payload.authoritative) {
+        beginAuthoritativeCoopRun(payload);
+        return;
+    }
+
+    beginForestRun('allies', {
+        fromNetwork: true,
+        networkSeed: String(payload.seed || '')
+    });
+}
+
 function bindUIActions() {
     if (ui.startBtn) {
         ui.startBtn.addEventListener('click', startGame);
     }
+    if (ui.rewardedEmbersBtn) {
+        ui.rewardedEmbersBtn.addEventListener('click', claimStartBonusReward);
+    }
     if (ui.restartBtn) {
         ui.restartBtn.addEventListener('click', startGame);
+    }
+    if (ui.gameOverRewardedBtn) {
+        ui.gameOverRewardedBtn.addEventListener('click', claimGameOverRewardBonus);
+    }
+    if (ui.openMultiplayerBtn) {
+        ui.openMultiplayerBtn.addEventListener('click', openMultiplayerScreen);
     }
 
     if (ui.openShopBtn) {
@@ -1998,6 +5096,44 @@ function bindUIActions() {
     }
     if (ui.resetSettingsBtn) {
         ui.resetSettingsBtn.addEventListener('click', resetSettingsToDefaults);
+    }
+    if (ui.closeCraftingBtn) {
+        ui.closeCraftingBtn.addEventListener('click', closeCraftingScreen);
+    }
+    if (ui.closeMultiplayerBtn) {
+        ui.closeMultiplayerBtn.addEventListener('click', closeMultiplayerScreen);
+    }
+    if (ui.mpCreateBtn) {
+        ui.mpCreateBtn.addEventListener('click', createMultiplayerRoom);
+    }
+    if (ui.mpJoinBtn) {
+        ui.mpJoinBtn.addEventListener('click', joinMultiplayerRoom);
+    }
+    if (ui.mpLeaveBtn) {
+        ui.mpLeaveBtn.addEventListener('click', leaveMultiplayerRoom);
+    }
+    if (ui.mpStartBtn) {
+        ui.mpStartBtn.addEventListener('click', startMultiplayerFromLobby);
+    }
+    if (ui.mpCopyCodeBtn) {
+        ui.mpCopyCodeBtn.addEventListener('click', copyMultiplayerCode);
+    }
+    if (ui.mpNameInput) {
+        ui.mpNameInput.addEventListener('change', () => {
+            state.multiplayer.name = sanitizePlayerName(ui.mpNameInput.value);
+            ui.mpNameInput.value = state.multiplayer.name;
+            saveStoredMultiplayerName(state.multiplayer.name);
+            updateMultiplayerProfile();
+            renderMultiplayerRoster();
+        });
+    }
+    if (ui.mpRoomInput) {
+        ui.mpRoomInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                joinMultiplayerRoom();
+            }
+        });
     }
 
     const liveSettingsInputs = [
@@ -2066,8 +5202,12 @@ function bindInput() {
             event.preventDefault();
             if (isScreenVisible(ui.settingsScreen)) {
                 closeSettingsScreen(true);
+            } else if (isScreenVisible(ui.craftingScreen)) {
+                closeCraftingScreen();
             } else if (isScreenVisible(ui.guideScreen)) {
                 closeGuideScreen(true);
+            } else if (isScreenVisible(ui.multiplayerScreen)) {
+                closeMultiplayerScreen();
             } else {
                 openSettingsScreen();
             }
@@ -2096,6 +5236,9 @@ function bindInput() {
         if (key === 'x') {
             fireBolt();
         }
+        if (key === 'v') {
+            triggerWeatherControl();
+        }
         if (event.key === ' ') {
             event.preventDefault();
             performDash();
@@ -2105,6 +5248,10 @@ function bindInput() {
             const optionBtn = ui.perkOptions ? ui.perkOptions.querySelectorAll('.perk-card')[idx] : null;
             if (optionBtn) optionBtn.click();
         }
+        if (key === 'm' && (!state.started || state.phase === 'DEPLOY' || state.phase === 'GAME_OVER')) {
+            event.preventDefault();
+            notifyMultiplayerDisabled();
+        }
     });
 
     window.addEventListener('keyup', (event) => {
@@ -2113,6 +5260,8 @@ function bindInput() {
 
     window.addEventListener('blur', () => {
         state.keys = {};
+        state.touchInput.sprint = false;
+        if (state.touchInput.enabled) resetTouchMovement();
     });
 
     window.addEventListener('resize', onWindowResize);
@@ -2250,6 +5399,8 @@ function buildStaticWorld() {
     buildTerrain();
     buildForest();
     buildCampfire();
+    buildCraftingTable();
+    buildDeployHub();
     buildPlayer();
     buildStars();
     buildRainParticles();
@@ -2343,7 +5494,11 @@ function buildForest() {
             x = rand(-CONFIG.WORLD_SIZE * 0.48, CONFIG.WORLD_SIZE * 0.48);
             z = rand(-CONFIG.WORLD_SIZE * 0.48, CONFIG.WORLD_SIZE * 0.48);
             tries += 1;
-        } while (Math.hypot(x, z) < 22 && tries < 40);
+        } while (
+            (Math.hypot(x, z) < 22
+                || dist2(x, z, CONFIG.DEPLOY_HUB_X, CONFIG.DEPLOY_HUB_Z) < 21)
+            && tries < 40
+        );
 
         const y = terrainHeight(x, z);
         const s = rand(0.72, 1.32);
@@ -2439,6 +5594,271 @@ function buildCampfire() {
     state.entities.campCore = core;
     state.entities.campRing = ring;
     state.entities.fireLight = fireLight;
+}
+
+function buildCraftingTable() {
+    const table = new THREE.Group();
+    const x = 11.5;
+    const z = 5.2;
+    const y = terrainHeight(x, z);
+
+    const top = new THREE.Mesh(
+        new THREE.BoxGeometry(2.5, 0.2, 1.7),
+        new THREE.MeshStandardMaterial({ color: 0x6a4c35, roughness: 0.86, metalness: 0.08 })
+    );
+    top.position.set(0, 1.35, 0);
+    top.castShadow = true;
+    top.receiveShadow = true;
+    table.add(top);
+
+    const legGeo = new THREE.BoxGeometry(0.2, 1.2, 0.2);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x4b3525, roughness: 0.9, metalness: 0.04 });
+    const legPositions = [
+        [-1.05, 0.7, -0.65],
+        [1.05, 0.7, -0.65],
+        [-1.05, 0.7, 0.65],
+        [1.05, 0.7, 0.65]
+    ];
+    for (let i = 0; i < legPositions.length; i++) {
+        const [lx, ly, lz] = legPositions[i];
+        const leg = new THREE.Mesh(legGeo, legMat);
+        leg.position.set(lx, ly, lz);
+        leg.castShadow = true;
+        leg.receiveShadow = true;
+        table.add(leg);
+    }
+
+    const blueprint = new THREE.Mesh(
+        new THREE.PlaneGeometry(1.2, 0.8),
+        new THREE.MeshStandardMaterial({
+            color: 0xa6d6ff,
+            emissive: 0x1a3f62,
+            emissiveIntensity: 0.7,
+            roughness: 0.45,
+            metalness: 0.22,
+            side: THREE.DoubleSide
+        })
+    );
+    blueprint.position.set(0.25, 1.47, 0.1);
+    blueprint.rotation.x = -Math.PI * 0.5;
+    table.add(blueprint);
+
+    const core = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.16, 0.24, 12),
+        new THREE.MeshStandardMaterial({
+            color: 0x91c9ff,
+            emissive: 0x2f7dbf,
+            emissiveIntensity: 1.3,
+            roughness: 0.2,
+            metalness: 0.45
+        })
+    );
+    core.position.set(-0.6, 1.52, -0.2);
+    core.castShadow = true;
+    table.add(core);
+
+    const glow = new THREE.PointLight(0x7fc7ff, 0.68, 11, 2);
+    glow.position.set(0, 2.2, 0);
+    table.add(glow);
+
+    table.position.set(x, y, z);
+    world.scene.add(table);
+    state.entities.craftingTable = {
+        mesh: table,
+        x,
+        z,
+        core,
+        glow,
+        pulseOffset: rand(0, Math.PI * 2)
+    };
+}
+
+function buildDeployHub() {
+    const hub = new THREE.Group();
+    const hx = CONFIG.DEPLOY_HUB_X;
+    const hz = CONFIG.DEPLOY_HUB_Z;
+    const hy = terrainHeight(hx, hz);
+
+    const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(14, 16, 1.4, 36),
+        new THREE.MeshStandardMaterial({ color: 0x2d3444, roughness: 0.84, metalness: 0.16 })
+    );
+    base.position.set(0, 0.7, 0);
+    base.receiveShadow = true;
+    base.castShadow = true;
+    hub.add(base);
+
+    const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(11.8, 0.24, 12, 64),
+        new THREE.MeshStandardMaterial({
+            color: 0x9ecbff,
+            emissive: 0x265784,
+            emissiveIntensity: 1.1,
+            roughness: 0.2,
+            metalness: 0.55
+        })
+    );
+    ring.rotation.x = Math.PI * 0.5;
+    ring.position.y = 1.45;
+    hub.add(ring);
+
+    const centerBeacon = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.45, 0.6, 3.8, 12),
+        new THREE.MeshStandardMaterial({
+            color: 0x7ab8ff,
+            emissive: 0x3273b2,
+            emissiveIntensity: 1.25,
+            roughness: 0.32,
+            metalness: 0.48
+        })
+    );
+    centerBeacon.position.set(0, 2.5, 0);
+    centerBeacon.castShadow = true;
+    hub.add(centerBeacon);
+
+    const makePortal = (portal, px) => {
+        const alliesLocked = portal.id === 'allies' && !isMultiplayerEnabled();
+        const group = new THREE.Group();
+        const pedestal = new THREE.Mesh(
+            new THREE.CylinderGeometry(1.25, 1.5, 0.9, 24),
+            new THREE.MeshStandardMaterial({ color: 0x4f5f74, roughness: 0.76, metalness: 0.22 })
+        );
+        pedestal.position.y = 0.45;
+        pedestal.castShadow = true;
+        pedestal.receiveShadow = true;
+        group.add(pedestal);
+
+        const arch = new THREE.Mesh(
+            new THREE.TorusGeometry(1.2, 0.16, 12, 40),
+            new THREE.MeshStandardMaterial({
+                color: portal.id === 'solo' ? 0x8be3ff : (alliesLocked ? 0x8d959f : 0xffc38a),
+                emissive: portal.id === 'solo' ? 0x2b6e80 : (alliesLocked ? 0x3b434c : 0x7d4418),
+                emissiveIntensity: 1.35,
+                roughness: 0.2,
+                metalness: 0.58
+            })
+        );
+        arch.rotation.x = Math.PI * 0.5;
+        arch.position.y = 1.55;
+        group.add(arch);
+
+        const glow = new THREE.PointLight(portal.id === 'solo' ? 0x71d4ff : (alliesLocked ? 0x8893a0 : 0xffb475), alliesLocked ? 0.55 : 1.2, 18, 2);
+        glow.position.y = 2.6;
+        group.add(glow);
+
+        group.position.set(px, 0, 6.8);
+        hub.add(group);
+        return {
+            id: portal.id,
+            label: portal.label,
+            desc: portal.desc,
+            x: hx + px,
+            z: hz + 6.8,
+            mesh: group,
+            glow,
+            arch,
+            pulseOffset: rand(0, Math.PI * 2)
+        };
+    };
+
+    const portals = [
+        makePortal(DEPLOY_PORTALS[0], -4.6),
+        makePortal(DEPLOY_PORTALS[1], 4.6)
+    ];
+
+    hub.position.set(hx, hy, hz);
+    world.scene.add(hub);
+    state.entities.deployHub = {
+        mesh: hub,
+        x: hx,
+        z: hz,
+        baseY: hy,
+        ring,
+        centerBeacon,
+        portals
+    };
+}
+
+function clearChests() {
+    for (let i = 0; i < state.entities.chests.length; i++) {
+        const chest = state.entities.chests[i];
+        if (chest.mesh && chest.mesh.parent) chest.mesh.parent.remove(chest.mesh);
+    }
+    state.entities.chests.length = 0;
+}
+
+function spawnChests() {
+    clearChests();
+
+    const lidMat = new THREE.MeshStandardMaterial({
+        color: 0x8b5f35,
+        roughness: 0.72,
+        metalness: 0.14
+    });
+    const baseMat = new THREE.MeshStandardMaterial({
+        color: 0x6f4a2d,
+        roughness: 0.82,
+        metalness: 0.1
+    });
+    const bandMat = new THREE.MeshStandardMaterial({
+        color: 0x9cb4d1,
+        emissive: 0x2b3f59,
+        emissiveIntensity: 0.45,
+        roughness: 0.32,
+        metalness: 0.62
+    });
+
+    for (let i = 0; i < CONFIG.CHEST_COUNT; i++) {
+        let x = 0;
+        let z = 0;
+        let tries = 0;
+        do {
+            x = rand(-CONFIG.WORLD_SIZE * 0.45, CONFIG.WORLD_SIZE * 0.45);
+            z = rand(-CONFIG.WORLD_SIZE * 0.45, CONFIG.WORLD_SIZE * 0.45);
+            tries += 1;
+        } while (
+            (Math.hypot(x, z) < 20
+                || dist2(x, z, CONFIG.DEPLOY_HUB_X, CONFIG.DEPLOY_HUB_Z) < 28
+                || (state.entities.craftingTable && dist2(x, z, state.entities.craftingTable.x, state.entities.craftingTable.z) < 14))
+            && tries < 50
+        );
+
+        const y = terrainHeight(x, z);
+        const chest = new THREE.Group();
+        const base = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.68, 0.88), baseMat);
+        base.position.y = 0.34;
+        base.castShadow = true;
+        base.receiveShadow = true;
+        chest.add(base);
+
+        const lidPivot = new THREE.Group();
+        lidPivot.position.set(0, 0.65, -0.42);
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.34, 0.88), lidMat);
+        lid.position.set(0, 0.17, 0.42);
+        lid.castShadow = true;
+        lid.receiveShadow = true;
+        lidPivot.add(lid);
+        chest.add(lidPivot);
+
+        const band = new THREE.Mesh(new THREE.BoxGeometry(1.26, 0.12, 0.18), bandMat);
+        band.position.set(0, 0.52, 0.02);
+        band.castShadow = true;
+        chest.add(band);
+
+        chest.position.set(x, y, z);
+        chest.rotation.y = rand(0, Math.PI * 2);
+        world.scene.add(chest);
+
+        state.entities.chests.push({
+            mesh: chest,
+            lidPivot,
+            x,
+            z,
+            opened: false,
+            roll: random(),
+            pulseOffset: rand(0, Math.PI * 2)
+        });
+    }
 }
 
 function buildPlayer() {
@@ -2625,6 +6045,7 @@ function applySkin(skinId) {
     mat.emissive.setHex(skin.emissive);
     mat.roughness = skin.roughness;
     mat.metalness = skin.metalness;
+    updateMultiplayerProfile();
 }
 
 function buildStars() {
@@ -2711,8 +6132,13 @@ function buildFireParticles() {
     }
 }
 
-function resetDynamicWorld() {
+function resetDynamicWorld(opts = {}) {
+    const spawnResourcesNow = opts.spawnResources !== false;
+    const spawnChestsNow = opts.spawnChests !== false;
+    const spawnBeaconsNow = opts.spawnBeacons !== false;
+
     clearResources();
+    clearChests();
     clearBeacons();
     clearEnemies();
     clearFlares();
@@ -2722,9 +6148,16 @@ function resetDynamicWorld() {
     clearProjectiles();
     clearEmberOrbs();
 
-    spawnResources('wood', CONFIG.WOOD_NODE_COUNT);
-    spawnResources('shard', CONFIG.SHARD_NODE_COUNT);
-    spawnBeacons();
+    if (spawnResourcesNow) {
+        spawnResources('wood', CONFIG.WOOD_NODE_COUNT);
+        spawnResources('shard', CONFIG.SHARD_NODE_COUNT);
+    }
+    if (spawnChestsNow) {
+        spawnChests();
+    }
+    if (spawnBeaconsNow) {
+        spawnBeacons();
+    }
 }
 
 function rebuildForestForRun() {
@@ -2741,7 +6174,112 @@ function rebuildForestForRun() {
     buildForest();
 }
 
-function startGame() {
+function beginAuthoritativeCoopRun(payload = {}) {
+    AudioManager.init();
+    state.multiplayer.authoritative.active = true;
+    state.multiplayer.authoritative.seed = String(payload.seed || '');
+    state.multiplayer.inputSeq = 0;
+    state.multiplayer.pingMs = 0;
+    resetAuthoritativeActionQueue();
+    clearAuthoritativeWorldMeshes();
+
+    refreshDailyChallenge();
+    state.partyMode = 'allies';
+    state.activeMode = state.selectedMode;
+    state.activeChallengeId = '';
+
+    state.started = true;
+    resetRunSystems();
+    state.settingsResumeOnClose = false;
+    state.craftingResumeOnClose = false;
+    state.deployment.awaitingChoice = false;
+    applyRelicLoadout();
+    state.runAssist = computeRunAssist();
+    state.phase = 'GATHER';
+    state.day = 1;
+    state.timeLeft = 0;
+
+    state.health = 100;
+    state.stamina = 100;
+    state.playerHitCooldown = 0;
+    state.wood = 0;
+    state.shards = 0;
+    state.score = 0;
+    state.fireRadius = getMaxFireRadius() * 0.58;
+    state.beaconsLit = 0;
+    state.ghostProximity = 0;
+
+    state.playerVelocity.set(0, 0, 0);
+    const py = terrainHeight(0, 8) + CONFIG.PLAYER_HEIGHT * 0.5;
+    state.entities.player.position.set(0, py, 8);
+    state.entities.player.rotation.y = 0;
+    state.playerFacing = 0;
+    state.cameraHeading = 0;
+    state.multiplayer.authoritative.localTargetPos.set(0, py, 8);
+    state.multiplayer.authoritative.localTargetRot = 0;
+    state.pauseReason = 'none';
+    state.touchInput.sprint = false;
+    if (state.touchInput.enabled) resetTouchMovement();
+    state.cameraTarget.set(0, py + 1.65, 8);
+    world.camera.position.set(0, py + 10, -4);
+    world.camera.lookAt(state.cameraTarget);
+    world.camera.fov = 62;
+    world.camera.updateProjectionMatrix();
+
+    state.weather.rain = 0;
+    state.weather.wind = 0;
+    state.weather.fog = 0.002;
+
+    rebuildForestForRun();
+    clearEnemies();
+    clearResources();
+    clearChests();
+    clearBeacons();
+    clearFlares();
+    clearPulses();
+    clearTraps();
+    clearHazards();
+    clearProjectiles();
+    clearEmberOrbs();
+    clearAlliedSentinels();
+    // In authoritative co-op, the server owns resource/chest state.
+    // Avoid spawning local placeholders that can appear collectible but are not.
+    resetDynamicWorld({
+        spawnResources: false,
+        spawnChests: false,
+        spawnBeacons: false
+    });
+
+    setWeatherTargets();
+
+    if (ui.startScreen) ui.startScreen.classList.add('hidden');
+    if (ui.shopScreen) ui.shopScreen.classList.add('hidden');
+    if (ui.guideScreen) ui.guideScreen.classList.add('hidden');
+    if (ui.settingsScreen) ui.settingsScreen.classList.add('hidden');
+    if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
+    if (ui.gameOverScreen) ui.gameOverScreen.classList.add('hidden');
+    if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
+    if (ui.multiplayerScreen) ui.multiplayerScreen.classList.add('hidden');
+
+    clearInterval(state.timers.phase);
+    state.telemetry.session = createTelemetrySession();
+    trackTelemetry('run_start', {
+        mode: state.activeMode,
+        difficulty: state.selectedDifficulty,
+        party: state.partyMode,
+        authoritative: 1
+    });
+
+    pushFeed('Authoritative co-op session active. Server now owns enemies, resources, and combat.', 'info');
+    notifyPlatformGameplayStart();
+    updateHUD();
+}
+
+function beginForestRun(partyMode = state.partyMode, options = {}) {
+    if (state.multiplayer.authoritative.active) {
+        endAuthoritativeSession('Exited authoritative co-op session.');
+    }
+    state.partyMode = partyMode === 'allies' ? 'allies' : 'solo';
     AudioManager.init();
 
     refreshDailyChallenge();
@@ -2749,7 +6287,9 @@ function startGame() {
     const challenge = state.activeMode === 'daily' ? state.daily : null;
     state.activeChallengeId = challenge ? challenge.id : '';
 
-    if (challenge) {
+    if (options.networkSeed) {
+        setRunSeed(options.networkSeed);
+    } else if (challenge) {
         setRunSeed(challenge.seed);
     } else {
         clearRunSeed();
@@ -2763,12 +6303,18 @@ function startGame() {
     state.runtime.damageMultiplier = diff.damageMultiplier;
     state.runtime.decayMultiplier = diff.decayMultiplier;
     state.runtime.emberMultiplier = diff.emberMultiplier;
+    if (hasGadget('sundial')) {
+        state.runtime.dayDuration += 18;
+    }
 
     state.started = true;
     resetRunSystems();
     state.settingsResumeOnClose = false;
+    state.craftingResumeOnClose = false;
+    state.deployment.awaitingChoice = false;
     applyDailyChallengeToRun(challenge);
     applyRelicLoadout();
+    state.runAssist = computeRunAssist();
     state.phase = 'GATHER';
     state.day = 1;
     state.timeLeft = state.runtime.dayDuration;
@@ -2777,12 +6323,12 @@ function startGame() {
     state.stamina = 100;
     state.playerHitCooldown = 0;
 
-    state.wood = 2 + state.relicRuntime.startWoodBonus + (challenge ? challenge.startWoodOffset : 0);
-    state.shards = 1 + state.relicRuntime.startShardBonus + (challenge ? challenge.startShardOffset : 0);
+    state.wood = 2 + state.relicRuntime.startWoodBonus + state.runAssist.startWoodBonus + (challenge ? challenge.startWoodOffset : 0);
+    state.shards = 1 + state.relicRuntime.startShardBonus + state.runAssist.startShardBonus + (challenge ? challenge.startShardOffset : 0);
     state.wood = Math.max(0, state.wood);
     state.shards = Math.max(0, state.shards);
 
-    state.fireRadius = getMaxFireRadius() * 0.58;
+    state.fireRadius = getMaxFireRadius() * (0.58 + state.runAssist.startWoodBonus * 0.018);
     state.beaconsLit = 0;
     state.ghostProximity = 0;
 
@@ -2793,6 +6339,8 @@ function startGame() {
     state.playerFacing = 0;
     state.cameraHeading = 0;
     state.pauseReason = 'none';
+    state.touchInput.sprint = false;
+    if (state.touchInput.enabled) resetTouchMovement();
     state.cameraTarget.set(0, py + 1.65, 8);
     world.camera.position.set(0, py + 10, -4);
     world.camera.lookAt(state.cameraTarget);
@@ -2806,7 +6354,9 @@ function startGame() {
     rebuildForestForRun();
     clearEnemies();
     clearFlares();
+    clearAlliedSentinels();
     resetDynamicWorld();
+    spawnAlliedSentinels();
 
     setWeatherTargets();
 
@@ -2814,11 +6364,20 @@ function startGame() {
     if (ui.shopScreen) ui.shopScreen.classList.add('hidden');
     if (ui.guideScreen) ui.guideScreen.classList.add('hidden');
     if (ui.settingsScreen) ui.settingsScreen.classList.add('hidden');
+    if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
     if (ui.gameOverScreen) ui.gameOverScreen.classList.add('hidden');
     if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
+    if (ui.multiplayerScreen) ui.multiplayerScreen.classList.add('hidden');
 
     clearInterval(state.timers.phase);
     state.timers.phase = setInterval(gameTick, 1000);
+    state.telemetry.session = createTelemetrySession();
+    trackTelemetry('run_start', {
+        mode: state.activeMode,
+        difficulty: state.selectedDifficulty,
+        party: state.partyMode,
+        assist: Number((1 - state.runAssist.enemySpawnMult).toFixed(2))
+    });
 
     rollContract('GATHER');
     if (challenge) {
@@ -2829,11 +6388,31 @@ function startGame() {
     if (state.equippedRelics.length > 0) {
         pushFeed(`Relics online: ${getRelicLoadoutText()}`, 'info');
     }
+    if (isRealMultiplayerSession()) {
+        pushFeed(`Multiplayer squad online (${state.multiplayer.players.length} players).`, 'info');
+    } else if (state.partyMode === 'allies') {
+        pushFeed('Allied sentinels linked. Shared run started.', 'info');
+    } else {
+        pushFeed('Solo run started.', 'info');
+    }
+    if (state.runAssist.startWoodBonus > 0 || state.runAssist.startShardBonus > 0) {
+        pushFeed(`Recovery boost active: +${state.runAssist.startWoodBonus} wood, +${state.runAssist.startShardBonus} shards.`, 'info');
+    }
+    notifyPlatformGameplayStart();
     updateHUD();
 }
 
+function startGame() {
+    notifyPlatformGameplayStop();
+    state.ads.gameOverBasePayout = 0;
+    state.ads.gameOverBonus = 0;
+    state.ads.gameOverRewardClaimed = false;
+    updateRewardedOfferUI();
+    beginForestRun('solo');
+}
+
 function gameTick() {
-    if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (!state.started || state.phase === 'GAME_OVER' || state.phase === 'DEPLOY' || state.paused) return;
 
     state.timeLeft -= 1;
     if (state.timeLeft <= 0) {
@@ -2867,6 +6446,11 @@ function startNight() {
     clearEmberOrbs();
     resetBeaconsState();
     spawnNightEnemies();
+    trackTelemetry('phase_night', {
+        day: state.day,
+        enemies: state.entities.enemies.length,
+        assistSpawnMult: Number(state.runAssist.enemySpawnMult.toFixed(2))
+    });
 
     rollContract('SURVIVE');
     setWeatherTargets();
@@ -2909,6 +6493,11 @@ function finishNight() {
     setWeatherTargets();
 
     pushFeed(`Dawn secured: +${bonus} embers`, 'info');
+    trackTelemetry('phase_day', {
+        day: state.day,
+        bonus,
+        beacons: state.beaconsLit
+    });
     spawnFloatingText(`+${bonus} EMBERS`, state.entities.player.position, '#ffd375');
     AudioManager.play('day');
     rollRelicDrop('night');
@@ -2972,6 +6561,11 @@ function completeContract(contract) {
     pushFeed(`Contract complete: +${payout} embers`, 'info');
     spawnFloatingText('CONTRACT COMPLETE', state.entities.player.position, '#9be6ff');
     AudioManager.play('perk');
+    trackTelemetry('contract_complete', {
+        id: contract.id,
+        payout,
+        day: state.day
+    });
 }
 
 function pickPerkOptions(count = 3) {
@@ -3049,15 +6643,24 @@ function hidePerkDraft() {
     if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
     state.paused = false;
     state.pauseReason = 'none';
+    if (state.started && state.phase !== 'GAME_OVER' && state.phase !== 'DEPLOY') {
+        notifyPlatformGameplayStart();
+    }
+    updateRewardedOfferUI();
 }
 
-function showPerkDraft() {
+function showPerkDraft(opts = {}) {
     if (!ui.perkScreen || !ui.perkOptions) return;
+    if (!opts.fromRewardedReroll) {
+        state.ads.perkRerollUsed = false;
+    }
+
     const options = pickPerkOptions(3);
     if (options.length === 0) return;
 
     state.paused = true;
     state.pauseReason = 'perk';
+    notifyPlatformGameplayStop();
     state.keys = {};
 
     if (ui.perkTitle) {
@@ -3085,7 +6688,21 @@ function showPerkDraft() {
         ui.perkOptions.appendChild(button);
     });
 
+    const allowRewardedReroll = !state.ads.perkRerollUsed && canRequestRewardedAd('perk_reroll');
+    if (allowRewardedReroll) {
+        const rerollButton = document.createElement('button');
+        rerollButton.type = 'button';
+        rerollButton.className = 'perk-card rewarded';
+        rerollButton.innerHTML = `
+            <span class="perk-name">R. Rewarded Reroll</span>
+            <span class="perk-desc">Watch a rewarded ad to reroll all augment choices once.</span>
+        `;
+        rerollButton.addEventListener('click', claimPerkRerollReward);
+        ui.perkOptions.appendChild(rerollButton);
+    }
+
     ui.perkScreen.classList.remove('hidden');
+    updateRewardedOfferUI();
     updateHUD();
 }
 
@@ -3094,6 +6711,7 @@ function showDawnDecision() {
 
     state.paused = true;
     state.pauseReason = 'perk';
+    notifyPlatformGameplayStop();
     state.keys = {};
 
     if (ui.perkTitle) {
@@ -3146,10 +6764,15 @@ function showDawnDecision() {
     });
 
     ui.perkScreen.classList.remove('hidden');
+    updateRewardedOfferUI();
     updateHUD();
 }
 
 function endGame(reason = 'The forest consumed your spark.', opts = {}) {
+    notifyPlatformGameplayStop();
+    if (state.multiplayer.authoritative.active) {
+        endAuthoritativeSession(reason || 'Authoritative session ended.');
+    }
     const endType = opts.endType || (opts.title === 'EXTRACTED' ? 'extract' : 'defeat');
     if (endType === 'defeat') {
         resolveNemesisEscape('player_down');
@@ -3162,6 +6785,8 @@ function endGame(reason = 'The forest consumed your spark.', opts = {}) {
     state.started = false;
     state.paused = false;
     state.pauseReason = 'none';
+    state.touchInput.sprint = false;
+    if (state.touchInput.enabled) resetTouchMovement();
     state.currentContract = null;
     clearInterval(state.timers.phase);
     clearEnemies();
@@ -3195,17 +6820,41 @@ function endGame(reason = 'The forest consumed your spark.', opts = {}) {
         pushFeed(`New daily best: ${dailyResult.score}.`, 'warn');
     }
 
+    state.ads.gameOverBasePayout = Math.max(0, Math.floor(payout));
+    state.ads.gameOverBonus = 0;
+    state.ads.gameOverRewardClaimed = false;
+
+    const profile = normalizeProfile(state.profile);
+    profile.totalRuns += 1;
+    profile.bestDay = Math.max(profile.bestDay, survivedDays);
+    profile.recentDays.push(survivedDays);
+    if (profile.recentDays.length > 8) profile.recentDays.shift();
+    if (endType === 'extract') {
+        profile.extracts += 1;
+        profile.lossStreak = 0;
+    } else {
+        profile.defeats += 1;
+        profile.lossStreak += 1;
+    }
+    state.profile = profile;
+
+    trackTelemetry('run_end', {
+        endType,
+        reason,
+        day: survivedDays,
+        payout
+    });
+    finalizeTelemetrySession({ result: endType, reason });
+
     saveProgress();
+    updateShopButtons();
 
     if (ui.gameOverScreen) ui.gameOverScreen.classList.remove('hidden');
     if (ui.perkScreen) ui.perkScreen.classList.add('hidden');
+    if (ui.craftingScreen) ui.craftingScreen.classList.add('hidden');
 
-    const title = document.getElementById('game-over-title');
-    const message = document.getElementById('game-over-message');
-    const earned = document.getElementById('earned-embers');
-
-    if (title) title.textContent = opts.title || 'EXTINGUISHED';
-    if (message) {
+    if (ui.gameOverTitle) ui.gameOverTitle.textContent = opts.title || 'EXTINGUISHED';
+    if (ui.gameOverMessage) {
         let messageText = opts.message || `${reason} Survived ${survivedDays} day(s), score ${Math.floor(state.score)}, augments ${state.runPerks.length}.`;
         messageText += ` Best chain ${state.chain.best}, overdrive activations ${state.overdrive.activations}.`;
         messageText += ` Night events: ${state.nightEvent.completedCount} clear / ${state.nightEvent.failedCount} failed.`;
@@ -3213,15 +6862,16 @@ function endGame(reason = 'The forest consumed your spark.', opts = {}) {
             messageText += ` Daily score ${dailyResult.score}.`;
             if (dailyResult.isBest) messageText += ' New personal best.';
         }
-        message.textContent = messageText;
+        ui.gameOverMessage.textContent = messageText;
     }
-    if (earned) earned.textContent = String(payout);
+    if (ui.gameOverEarned) ui.gameOverEarned.textContent = String(payout);
 
     const feedText = opts.feedText || (opts.title === 'EXTRACTED'
         ? 'Run extracted. Refit and redeploy.'
         : 'Run ended. Upgrade and try a tougher route.');
     pushFeed(feedText, opts.feedKind || (opts.title === 'EXTRACTED' ? 'info' : 'danger'));
     state.activeChallengeId = '';
+    updateRewardedOfferUI();
     updateHUD();
 }
 
@@ -3233,9 +6883,30 @@ function animate(now) {
     world.time += dt;
 
     updateFireParticles(dt);
+    updateWorldInteractables(dt);
+    updateRemotePlayers(dt);
 
     if (state.started && state.phase !== 'GAME_OVER') {
-        if (!state.paused) {
+        if (state.phase === 'DEPLOY') {
+            updatePlayer(dt);
+            updateWeather(dt);
+            updateLighting(dt);
+            updateVFX(dt);
+            updateInteractionPrompt();
+            updateCamera(dt);
+            drawRadar();
+            updateHUD();
+        } else if (!state.paused && isAuthoritativeCoopActive()) {
+            updatePlayer(dt);
+            updateAuthoritativeVisualSmoothing(dt);
+            updateWeather(dt);
+            updateLighting(dt);
+            updateVFX(dt);
+            updateInteractionPrompt();
+            updateCamera(dt);
+            drawRadar();
+            updateHUD();
+        } else if (!state.paused) {
             updateAbilityCooldowns(dt);
             updatePlayer(dt);
             updateResourcesCollection();
@@ -3245,6 +6916,7 @@ function animate(now) {
             updateHazards(dt);
             updateProjectiles(dt);
             updateEmberOrbs(dt);
+            updateAlliedSentinels(dt);
             updateBeacons(dt);
             updateDirector(dt);
             updateNightEvent(dt);
@@ -3276,6 +6948,7 @@ function animate(now) {
         drawRadar();
     }
 
+    emitMultiplayerState(dt);
     world.renderer.render(world.scene, world.camera);
 }
 
@@ -3283,10 +6956,59 @@ function updatePlayer(dt) {
     const player = state.entities.player;
     if (!player) return;
 
+    if (isAuthoritativeCoopActive()) {
+        const auth = state.multiplayer.authoritative;
+        const targetPos = auth.localTargetPos;
+        const targetRot = auth.localTargetRot;
+
+        const moveDir = getMovementDirection();
+        const moving = moveDir.lengthSq() > 0.0001;
+        const sprinting = !!(state.keys.shift || state.keys.shiftleft || state.keys.shiftright || state.touchInput.sprint);
+        const predictedSpeed = CONFIG.PLAYER_BASE_SPEED * (sprinting ? CONFIG.PLAYER_SPRINT_MULT : 1);
+        const predictedVel = TMP.moveTarget.copy(moveDir).multiplyScalar(predictedSpeed);
+        const accel = 1 - Math.exp(-dt * 10);
+        state.playerVelocity.lerp(predictedVel, accel);
+
+        const drag = Math.max(0, 1 - CONFIG.PLAYER_DRAG * 0.9 * dt);
+        state.playerVelocity.multiplyScalar(drag);
+
+        const predictedPos = TMP.authPredPos.copy(player.position).addScaledVector(state.playerVelocity, dt);
+        const correction = TMP.authCorrection.copy(targetPos).sub(predictedPos);
+        const correctionDist = correction.length();
+        const pingMs = Math.max(0, Number(state.multiplayer.pingMs) || 0);
+        const snapDistance = CONFIG.MULTIPLAYER_LOCAL_SNAP_DISTANCE_BASE
+            + clamp((pingMs - 80) * CONFIG.MULTIPLAYER_LOCAL_SNAP_DISTANCE_PING_SCALE, 0, 16);
+
+        if (correctionDist > snapDistance) {
+            player.position.copy(targetPos);
+            state.playerVelocity.set(0, 0, 0);
+        } else {
+            const correctionStrength = correctionDist > 5
+                ? CONFIG.MULTIPLAYER_LOCAL_CORRECTION_FAR
+                : CONFIG.MULTIPLAYER_LOCAL_CORRECTION_NEAR;
+            const pingScale = pingMs > 140 ? 0.62 : pingMs > 90 ? 0.78 : 1;
+            const correctionGain = 1 - Math.exp(-dt * correctionStrength * pingScale);
+            predictedPos.addScaledVector(correction, correctionGain);
+            player.position.copy(predictedPos);
+        }
+
+        if (moving && state.playerVelocity.lengthSq() > 0.05) {
+            const targetFacing = Math.atan2(state.playerVelocity.x, state.playerVelocity.z);
+            player.rotation.y = lerpAngle(player.rotation.y, targetFacing, 1 - Math.exp(-dt * 12));
+        }
+        player.rotation.y = lerpAngle(player.rotation.y, targetRot, 1 - Math.exp(-dt * 10));
+        state.playerFacing = player.rotation.y;
+        state.cameraHeading = state.playerFacing;
+
+        const horizontalSpeed = Math.hypot(state.playerVelocity.x, state.playerVelocity.z);
+        updatePlayerRigAnimation(dt, horizontalSpeed, horizontalSpeed > 0.1);
+        return;
+    }
+
     const moveDir = getMovementDirection();
     const moveAmount = moveDir.lengthSq();
 
-    const sprinting = (state.keys.shift || state.keys.shiftleft || state.keys.shiftright) && state.stamina > 3;
+    const sprinting = (state.keys.shift || state.keys.shiftleft || state.keys.shiftright || state.touchInput.sprint) && state.stamina > 3;
 
     let maxSpeed = CONFIG.PLAYER_BASE_SPEED + state.runMods.speedFlatBonus;
     if (hasUpgrade('speed_boots')) maxSpeed *= 1.15;
@@ -3328,8 +7050,9 @@ function updatePlayer(dt) {
     player.position.z = nextZ;
     player.position.y = lerp(player.position.y, targetY, 1 - Math.exp(-dt * 20));
 
-    const inputX = (state.keys.d || state.keys.arrowright ? 1 : 0) - (state.keys.a || state.keys.arrowleft ? 1 : 0);
-    const inputY = (state.keys.w || state.keys.arrowup ? 1 : 0) - (state.keys.s || state.keys.arrowdown ? 1 : 0);
+    const input = getInputAxes();
+    const inputX = input.x;
+    const inputY = input.y;
     const hasMoveInput = inputX !== 0 || inputY !== 0;
     const horizontalSpeed = Math.hypot(state.playerVelocity.x, state.playerVelocity.z);
     if (horizontalSpeed > 0.25 && hasMoveInput) {
@@ -3420,10 +7143,18 @@ function updateAbilityCooldowns(dt) {
         state.boltCooldown -= dt * cooldownRate;
         if (state.boltCooldown < 0) state.boltCooldown = 0;
     }
+    if (state.weatherControlCooldown > 0) {
+        state.weatherControlCooldown -= dt * cooldownRate;
+        if (state.weatherControlCooldown < 0) state.weatherControlCooldown = 0;
+    }
 }
 
 function performDash() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('dash');
+        return;
+    }
     if (state.dashCooldown > 0) return;
 
     const dir = getMovementDirection().clone();
@@ -3484,6 +7215,7 @@ function spawnResources(kind, count) {
 
         mesh.userData.spin = rand(0.5, 1.4);
         mesh.userData.floatOffset = rand(0, Math.PI * 2);
+        mesh.userData.baseY = mesh.position.y;
 
         world.scene.add(mesh);
 
@@ -3522,7 +7254,7 @@ function updateResourcesCollection() {
         if (!node.active) return;
 
         node.mesh.rotation.y += 0.02;
-        if (p.distanceTo(node.mesh.position) < 1.6) {
+        if (dist2(p.x, p.z, node.mesh.position.x, node.mesh.position.z) < 1.95) {
             node.active = false;
             node.mesh.visible = false;
             state.wood += 1;
@@ -3537,9 +7269,13 @@ function updateResourcesCollection() {
         if (!node.active) return;
 
         node.mesh.rotation.y += 0.05;
-        node.mesh.position.y += Math.sin(world.time * 2 + node.mesh.userData.floatOffset) * 0.004;
+        const baseY = Number.isFinite(node.mesh.userData.baseY)
+            ? node.mesh.userData.baseY
+            : node.mesh.position.y;
+        node.mesh.userData.baseY = baseY;
+        node.mesh.position.y = baseY + Math.sin(world.time * 2 + node.mesh.userData.floatOffset) * 0.18;
 
-        if (p.distanceTo(node.mesh.position) < 1.7) {
+        if (dist2(p.x, p.z, node.mesh.position.x, node.mesh.position.z) < 2.05) {
             node.active = false;
             node.mesh.visible = false;
             let gain = hasUpgrade('blue_flame') ? 2 : 1;
@@ -3696,7 +7432,7 @@ function pickEliteModifier(day, archetype, bossNight) {
 function spawnNightEnemies() {
     const threatMult = 1 + state.pushStreak * CONFIG.PUSH_THREAT_STEP;
     const directorMult = 1 + state.director.intensity * 0.12;
-    const count = Math.floor((CONFIG.NIGHT_ENEMY_BASE + state.day * CONFIG.NIGHT_ENEMY_GROWTH) * state.runtime.spawnMultiplier * threatMult * directorMult);
+    const count = Math.floor((CONFIG.NIGHT_ENEMY_BASE + state.day * CONFIG.NIGHT_ENEMY_GROWTH) * state.runtime.spawnMultiplier * state.runAssist.enemySpawnMult * threatMult * directorMult);
     const enemyCount = clamp(count, 3, 16);
     const bossNight = state.day > 0 && state.day % 5 === 0;
     let eliteCount = 0;
@@ -4058,10 +7794,11 @@ function updateDirector(dt) {
     target += Math.max(0, healthT - 0.6) * 0.14;
     target -= Math.max(0, 0.52 - healthT) * 0.36;
     target -= Math.max(0, 0.35 - fireT) * 0.26;
+    target *= lerp(0.9, 1.08, clamp(state.runAssist.enemySpawnMult, 0.72, 1.22));
     state.director.target = clamp(target, 0.14, 1.12);
     state.director.intensity = lerp(state.director.intensity, state.director.target, 1 - Math.exp(-dt * 1.5));
 
-    const aliveCap = 8 + state.day + Math.floor(state.director.intensity * 4);
+    const aliveCap = clamp(Math.floor((8 + state.day + Math.floor(state.director.intensity * 4)) * state.runAssist.enemySpawnMult), 4, 28);
     state.director.reinforceTimer -= dt * (0.8 + state.director.intensity * 0.92);
     if (state.director.reinforceTimer <= 0 && state.entities.enemies.length < aliveCap) {
         const waveSize = state.director.intensity > 0.82 ? 2 : 1;
@@ -4330,6 +8067,10 @@ function updateEnemies(dt) {
 
 function castFlare() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('flare');
+        return;
+    }
     const flareCost = Math.max(0, CONFIG.FLARE_COST + state.runMods.flareCostOffset);
     if (state.shards < flareCost) {
         pushFeed('No shards left for a flare.', 'warn');
@@ -4385,6 +8126,10 @@ function castFlare() {
 
 function craftWeaponOrAmmo() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('craft');
+        return;
+    }
 
     if (!state.weapon.crafted) {
         const woodCost = Math.max(3, CONFIG.CRAFT_BOW_WOOD_COST - (hasUpgrade('arc_bow') ? 1 : 0));
@@ -4431,6 +8176,10 @@ function craftWeaponOrAmmo() {
 
 function fireBolt() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('shoot');
+        return;
+    }
     if (!state.weapon.crafted) {
         pushFeed('Craft Arc Bow first (C).', 'warn');
         return;
@@ -4480,6 +8229,10 @@ function fireBolt() {
 
 function castPulseBlast() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('pulse');
+        return;
+    }
     if (state.pulseCooldown > 0) return;
     if (state.shards < 1) {
         pushFeed('Need at least 1 shard to trigger pulse.', 'warn');
@@ -4571,7 +8324,7 @@ function resolveEnemyDeath(enemy, cause = 'unknown') {
     const emberGain = grantEmbers(reward, { useDifficulty: false, useCombo: true });
     state.score += emberGain;
 
-    const shardDropChance = 0.2 + state.runMods.enemyDropBonus + (modifier ? 0.05 : 0);
+    const shardDropChance = 0.2 + state.runMods.enemyDropBonus + state.runAssist.dropBonus + (modifier ? 0.05 : 0);
     if (random() < shardDropChance) state.shards += 1;
     if (state.runMods.killHeal > 0) state.health = clamp(state.health + state.runMods.killHeal, 0, 100);
 
@@ -4613,6 +8366,16 @@ function resolveEnemyDeath(enemy, cause = 'unknown') {
 
     if (cause === 'bolt' && emberGain >= 10) {
         spawnFloatingText('ARC HIT', enemy.mesh.position, '#ffce85');
+    }
+
+    const kills = state.metrics.enemiesKilled;
+    if (enemy.nemesis || archetype.id === 'titan' || (kills > 0 && kills % 5 === 0)) {
+        trackTelemetry('kill_marker', {
+            kills,
+            combo: Number(state.comboMultiplier.toFixed(2)),
+            nemesis: enemy.nemesis ? 1 : 0,
+            elite: modifier ? 1 : 0
+        });
     }
 }
 
@@ -4663,6 +8426,10 @@ function updateProjectiles(dt) {
 
 function deployTrap() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('trap');
+        return;
+    }
     const trapKit = hasUpgrade('trap_kit');
     const trapLimit = CONFIG.MAX_ACTIVE_TRAPS + (trapKit ? 1 : 0);
     const woodCost = CONFIG.TRAP_COST_WOOD;
@@ -5041,12 +8808,13 @@ function updateFireSystem(dt) {
     let decay = state.phase === 'GATHER' ? CONFIG.FIRE_DECAY_DAY : CONFIG.FIRE_DECAY_NIGHT;
     decay *= state.runtime.decayMultiplier;
     decay *= state.runMods.fireDecayMult;
+    decay *= state.runAssist.fireDecayMult;
 
     if (hasUpgrade('blue_flame')) decay *= 0.74;
     if (state.overdrive.active) decay *= CONFIG.OVERDRIVE_FIRE_DECAY_MULT;
 
     const weatherPenalty = 1 + state.weather.rain * 1.35 + state.weather.wind * 0.4;
-    decay *= weatherPenalty;
+    decay *= hasGadget('lightning_rods') ? lerp(weatherPenalty, 1, 0.45) : weatherPenalty;
 
     state.fireRadius -= decay * dt;
     state.fireRadius = clamp(state.fireRadius, 0, getMaxFireRadius());
@@ -5154,6 +8922,8 @@ function updateWeather(dt) {
 }
 
 function setWeatherTargets() {
+    const hasRods = hasGadget('lightning_rods');
+    const hasController = hasGadget('weather_controller');
     if (state.phase === 'SURVIVE') {
         const progression = clamp((state.day - 1) / 8, 0, 1);
         state.weather.targetRain = state.day >= 3 ? lerp(0.15, 0.9, progression) : 0;
@@ -5164,6 +8934,16 @@ function setWeatherTargets() {
         state.weather.targetRain = 0;
         state.weather.targetWind = 0.05 + progression * 0.2;
         state.weather.targetFog = 0.002 + progression * 0.003;
+    }
+
+    if (hasRods) {
+        state.weather.targetRain *= 0.72;
+        state.weather.targetWind *= 0.76;
+        state.weather.targetFog *= 0.88;
+    }
+    if (hasController) {
+        state.weather.targetRain *= 0.9;
+        state.weather.targetWind *= 0.92;
     }
 }
 
@@ -5319,6 +9099,37 @@ function updateVFX(dt) {
     }
 }
 
+function updateWorldInteractables(dt) {
+    const table = state.entities.craftingTable;
+    if (table) {
+        table.core.rotation.y += dt * 1.8;
+        table.core.position.y = 1.52 + Math.sin(world.time * 3 + table.pulseOffset) * 0.06;
+        table.glow.intensity = 0.55 + Math.sin(world.time * 4 + table.pulseOffset) * 0.22;
+    }
+
+    const hub = state.entities.deployHub;
+    if (hub) {
+        hub.ring.rotation.z += dt * 0.35;
+        hub.centerBeacon.material.emissiveIntensity = 1 + Math.sin(world.time * 2.2) * 0.25;
+        const portals = hub.portals || [];
+        for (let i = 0; i < portals.length; i++) {
+            const portal = portals[i];
+            portal.arch.rotation.z += dt * (portal.id === 'solo' ? 0.9 : -0.9);
+            const alliesLocked = portal.id === 'allies' && !isMultiplayerEnabled();
+            const baseIntensity = alliesLocked ? 0.28 : 0.9;
+            const amp = alliesLocked ? 0.08 : 0.32;
+            portal.glow.intensity = baseIntensity + Math.sin(world.time * 3 + portal.pulseOffset) * amp;
+        }
+    }
+
+    for (let i = 0; i < state.entities.chests.length; i++) {
+        const chest = state.entities.chests[i];
+        if (chest.opened) continue;
+        const bob = Math.sin(world.time * 2 + chest.pulseOffset) * 0.02;
+        chest.mesh.position.y = terrainHeight(chest.x, chest.z) + bob;
+    }
+}
+
 function triggerFlash(color, duration) {
     state.vfx.flashColor = color;
     state.vfx.flashTimer = Math.max(state.vfx.flashTimer, duration);
@@ -5378,7 +9189,36 @@ function updateIdleCamera(dt) {
 function interact() {
     if (!state.started || state.phase === 'GAME_OVER' || state.paused) return;
 
+    if (state.phase === 'DEPLOY') {
+        const portal = getNearbyDeployPortal();
+        if (portal) {
+            if (portal.id === 'allies') {
+                notifyMultiplayerDisabled();
+            } else {
+                beginForestRun('solo');
+            }
+        } else {
+            pushFeed('Move to the Solo Rift gate to deploy.', 'warn');
+        }
+        return;
+    }
+
+    if (isAuthoritativeCoopActive()) {
+        queueAuthoritativeAction('interact');
+        return;
+    }
+
     const player = state.entities.player.position;
+    const chest = getNearbyChest();
+    if (chest) {
+        openChest(chest);
+        return;
+    }
+
+    if (getCraftingTableDistance() < 4.4) {
+        openCraftingScreen();
+        return;
+    }
 
     const nearCamp = Math.hypot(player.x, player.z) < 9.8;
     if (nearCamp) {
@@ -5420,7 +9260,40 @@ function updateInteractionPrompt() {
         return;
     }
 
+    if (state.phase === 'DEPLOY') {
+        const portal = getNearbyDeployPortal();
+        if (!portal) {
+            ui.interactionText.textContent = 'MOVE TO SOLO RIFT';
+        } else if (portal.id === 'allies') {
+            ui.interactionText.textContent = 'WITH OTHERS: COMING SOON';
+        } else {
+            ui.interactionText.textContent = 'E: ENTER SOLO RIFT';
+        }
+        ui.interactionPrompt.classList.remove('hidden');
+        return;
+    }
+
     const player = state.entities.player.position;
+
+    if (!isAuthoritativeCoopActive() && getCraftingTableDistance() < 4.4) {
+        ui.interactionText.textContent = 'OPEN CRAFTING TABLE';
+        ui.interactionPrompt.classList.remove('hidden');
+        return;
+    }
+
+    const chest = getNearbyChest();
+    if (chest) {
+        ui.interactionText.textContent = 'OPEN CHEST';
+        ui.interactionPrompt.classList.remove('hidden');
+        return;
+    }
+
+    const lootedChest = getNearbyOpenedChest();
+    if (lootedChest) {
+        ui.interactionText.textContent = 'CHEST LOOTED';
+        ui.interactionPrompt.classList.remove('hidden');
+        return;
+    }
 
     if (Math.hypot(player.x, player.z) < 9.8) {
         ui.interactionText.textContent = state.wood > 0 ? 'STOKE FIRE' : 'NEED WOOD';
@@ -5449,6 +9322,7 @@ function drawRadar() {
     const cx = w * 0.5;
     const cy = h * 0.5;
     const radius = w * 0.44;
+    const radarRange = getRadarRange();
 
     ctx.clearRect(0, 0, w, h);
 
@@ -5479,8 +9353,8 @@ function drawRadar() {
     const pz = state.entities.player.position.z;
 
     const plot = (x, z, color, size) => {
-        const rx = (x - px) / CONFIG.RADAR_RANGE;
-        const rz = (z - pz) / CONFIG.RADAR_RANGE;
+        const rx = (x - px) / radarRange;
+        const rz = (z - pz) / radarRange;
         const sx = cx + rx * radius;
         const sy = cy + rz * radius;
 
@@ -5498,6 +9372,21 @@ function drawRadar() {
     state.entities.beacons.forEach((beacon) => {
         plot(beacon.x, beacon.z, beacon.active ? '#ffd46d' : '#7c90a8', beacon.active ? 2.8 : 2);
     });
+
+    if (state.entities.deployHub && state.entities.deployHub.portals) {
+        state.entities.deployHub.portals.forEach((portal) => {
+            const alliesLocked = portal.id === 'allies' && !isMultiplayerEnabled();
+            const color = portal.id === 'solo' ? '#82ddff' : (alliesLocked ? '#7b8692' : '#ffbe82');
+            plot(portal.x, portal.z, color, 2.8);
+        });
+    }
+
+    const remoteIds = Object.keys(state.entities.remotePlayers);
+    for (let i = 0; i < remoteIds.length; i++) {
+        const remote = state.entities.remotePlayers[remoteIds[i]];
+        if (!remote || !remote.mesh) continue;
+        plot(remote.mesh.position.x, remote.mesh.position.z, '#79e7ff', 2.6);
+    }
 
     state.entities.enemies.forEach((enemy) => {
         const type = enemy.archetype ? enemy.archetype.id : 'wraith';
@@ -5538,17 +9427,29 @@ function drawRadar() {
         plot(orb.mesh.position.x, orb.mesh.position.z, orb.nemesis ? '#ffd18a' : '#ffcf8f', orb.nemesis ? 2.8 : 2.1);
     });
 
+    if (hasGadget('map_kit') || hasGadget('radar_array')) {
+        let shownChests = 0;
+        state.entities.chests.forEach((chest) => {
+            if (!chest.opened && shownChests < (hasGadget('map_kit') ? 32 : 18)) {
+                plot(chest.x, chest.z, '#ffc07c', 2);
+                shownChests += 1;
+            }
+        });
+    }
+
     let shownWood = 0;
+    const woodLimit = hasGadget('map_kit') ? 46 : 24;
     state.entities.resources.wood.forEach((node) => {
-        if (node.active && shownWood < 24) {
+        if (node.active && shownWood < woodLimit) {
             plot(node.mesh.position.x, node.mesh.position.z, '#9f7448', 1.6);
             shownWood += 1;
         }
     });
 
     let shownShards = 0;
+    const shardLimit = hasGadget('map_kit') ? 26 : 16;
     state.entities.resources.shards.forEach((node) => {
-        if (node.active && shownShards < 16) {
+        if (node.active && shownShards < shardLimit) {
             plot(node.mesh.position.x, node.mesh.position.z, '#77d7ff', 1.8);
             shownShards += 1;
         }
@@ -5632,6 +9533,8 @@ function updateHUD() {
     if (state.paused) {
         if (state.pauseReason === 'settings') {
             ui.phase.textContent = 'PAUSED';
+        } else if (state.pauseReason === 'crafting') {
+            ui.phase.textContent = 'CRAFTING';
         } else {
             const decisionMode = ui.perkTitle && ui.perkTitle.textContent === 'DAWN DECISION';
             ui.phase.textContent = decisionMode ? 'DECISION' : 'AUGMENT';
@@ -5641,7 +9544,10 @@ function updateHUD() {
     }
     ui.timer.textContent = String(Math.max(0, Math.ceil(state.timeLeft)));
 
-    const phaseTotal = state.phase === 'SURVIVE' ? state.runtime.nightDuration : state.runtime.dayDuration;
+    const authoritative = isAuthoritativeCoopActive();
+    const phaseTotal = authoritative
+        ? (state.phase === 'SURVIVE' ? 65 : 70)
+        : (state.phase === 'SURVIVE' ? state.runtime.nightDuration : state.runtime.dayDuration);
     const ring = clamp((state.timeLeft / Math.max(phaseTotal, 1)) * 100, 0, 100);
     if (ui.timerCircle) ui.timerCircle.setAttribute('stroke-dasharray', `${ring}, 100`);
 
@@ -5691,19 +9597,30 @@ function updateHUD() {
     const nemesis = getActiveNemesisEnemy();
     const event = state.nightEvent;
     const modePrefix = state.activeMode === 'daily' ? '[DAILY] ' : '';
+    const assistLabel = state.runAssist.enemySpawnMult < 0.98 ? ' | RECOVERY BOOST' : '';
+    const weatherCtl = hasGadget('weather_controller')
+        ? ` | Weather Ctrl ${state.weatherControlCooldown > 0 ? `${state.weatherControlCooldown.toFixed(1)}s` : 'READY (V)'}`
+        : '';
 
     if (ui.objectiveText) {
         if (state.paused) {
             if (state.pauseReason === 'settings') {
                 ui.objectiveText.textContent = 'Settings open. Press Esc to resume.';
+            } else if (state.pauseReason === 'crafting') {
+                ui.objectiveText.textContent = 'Crafting table active. Build upgrades and continue.';
             } else {
                 const decisionMode = ui.perkTitle && ui.perkTitle.textContent === 'DAWN DECISION';
                 ui.objectiveText.textContent = decisionMode
                     ? 'Choose to extract or push deeper.'
                     : 'Choose an augment to continue the run.';
             }
+        } else if (state.phase === 'GATHER' && authoritative) {
+            ui.objectiveText.textContent = `${modePrefix}Server-authoritative co-op: gather resources and stoke fire (${firePct}%).`;
         } else if (state.phase === 'GATHER') {
-            ui.objectiveText.textContent = `${modePrefix}Gather wood and shards. Fire ${firePct}%.`;
+            ui.objectiveText.textContent = `${modePrefix}Gather wood and shards. Fire ${firePct}%${assistLabel}${weatherCtl}.`;
+        } else if (state.phase === 'SURVIVE' && authoritative) {
+            const enemyCount = state.entities.enemies.length;
+            ui.objectiveText.textContent = `${modePrefix}Server-authoritative survival: hold zone and clear hostiles (${enemyCount}). Fire ${firePct}%.`;
         } else if (state.phase === 'SURVIVE') {
             const threatPct = Math.round((1 + state.pushStreak * CONFIG.PUSH_THREAT_STEP) * 100);
             const nemesisText = nemesis ? ` | Nemesis ${state.nemesisProfile.name}` : '';
@@ -5719,7 +9636,9 @@ function updateHUD() {
             } else if (event.outcome === 'failed') {
                 eventText = ' | Event failed';
             }
-            ui.objectiveText.textContent = `${modePrefix}Ignite beacons (${state.beaconsLit}/${CONFIG.BEACON_COUNT}). Fire ${firePct}% | Threat ${threatPct}%${nemesisText}${orbText}${driveText}${eventText}.`;
+            ui.objectiveText.textContent = `${modePrefix}Ignite beacons (${state.beaconsLit}/${CONFIG.BEACON_COUNT}). Fire ${firePct}% | Threat ${threatPct}%${assistLabel}${weatherCtl}${nemesisText}${orbText}${driveText}${eventText}.`;
+        } else if (state.phase === 'DEPLOY') {
+            ui.objectiveText.textContent = 'Deployment Nexus: step into Solo Rift to start.';
         } else if (state.phase === 'GAME_OVER') {
             ui.objectiveText.textContent = 'Run ended. Upgrade and deploy again.';
         } else {
@@ -5730,10 +9649,16 @@ function updateHUD() {
     if (ui.contractText) {
         if (state.paused && state.pauseReason === 'settings') {
             ui.contractText.textContent = 'Settings open';
+        } else if (state.paused && state.pauseReason === 'crafting') {
+            ui.contractText.textContent = 'Crafting in progress';
+        } else if (authoritative && state.phase === 'SURVIVE') {
+            ui.contractText.textContent = `Authoritative co-op online • Enemies ${state.entities.enemies.length}`;
         } else if (state.phase === 'SURVIVE' && event.active) {
             ui.contractText.textContent = `Event ${event.label}: ${Math.min(event.progress, event.goal)} / ${event.goal} (${Math.max(0, Math.ceil(event.timer))}s)`;
         } else if (state.phase === 'SURVIVE' && !event.resolved) {
             ui.contractText.textContent = `Night event inbound: ${Math.max(0, Math.ceil(event.triggerTimer))}s`;
+        } else if (state.phase === 'DEPLOY') {
+            ui.contractText.textContent = 'Solo Rift online • With Others coming soon';
         } else {
             const c = state.currentContract;
             if (!c) {
@@ -5750,6 +9675,7 @@ function updateHUD() {
     if (ui.screenEmbers) ui.screenEmbers.textContent = String(Math.floor(state.embers));
     if (ui.highScore) ui.highScore.textContent = `${Math.max(0, state.highScore)} Nights`;
     if (ui.skinName) ui.skinName.textContent = state.equippedSkin.replace(/_/g, ' ').toUpperCase();
+    updateTouchControlsVisibility();
 }
 
 function hasUpgrade(id) {
@@ -5763,6 +9689,8 @@ function isOwned(id) {
 function purchaseItem(id, price) {
     const isSkin = Object.prototype.hasOwnProperty.call(SKINS, id);
     const owned = isOwned(id);
+    const lossDiscount = clamp((state.profile.lossStreak || 0) * 0.04, 0, 0.2);
+    const effectivePrice = Math.max(1, Math.floor(price * (1 - lossDiscount)));
 
     if (owned) {
         if (isSkin) {
@@ -5776,12 +9704,12 @@ function purchaseItem(id, price) {
         return;
     }
 
-    if (state.embers < price) {
+    if (state.embers < effectivePrice) {
         pushFeed('Not enough embers.', 'warn');
         return;
     }
 
-    state.embers -= price;
+    state.embers -= effectivePrice;
 
     if (isSkin) {
         state.inventory.skins.push(id);
@@ -5798,13 +9726,16 @@ function purchaseItem(id, price) {
     updateShopButtons();
     updateHUD();
 
-    pushFeed(`Unlocked ${id.replace(/_/g, ' ')}`, 'info');
+    pushFeed(`Unlocked ${id.replace(/_/g, ' ')} for ${effectivePrice} embers`, 'info');
+    trackTelemetry('shop_purchase', { id, price: effectivePrice, discounted: effectivePrice < price ? 1 : 0 });
 }
 
 function updateShopButtons() {
+    const lossDiscount = clamp((state.profile.lossStreak || 0) * 0.04, 0, 0.2);
     document.querySelectorAll('.shop-item').forEach((item) => {
         const id = item.dataset.id;
         const price = Number(item.dataset.price || 0);
+        const effectivePrice = Math.max(1, Math.floor(price * (1 - lossDiscount)));
         const btn = item.querySelector('.buy-btn');
         if (!btn) return;
 
@@ -5813,7 +9744,13 @@ function updateShopButtons() {
 
         if (!owned) {
             btn.disabled = false;
-            btn.innerHTML = `${price} <i class="fa-solid fa-fire-flame-curved"></i>`;
+            if (effectivePrice !== price) {
+                btn.innerHTML = `${effectivePrice} <i class="fa-solid fa-fire-flame-curved"></i>`;
+                btn.title = `Discounted from ${price}`;
+            } else {
+                btn.innerHTML = `${price} <i class="fa-solid fa-fire-flame-curved"></i>`;
+                btn.title = '';
+            }
             return;
         }
 
@@ -5862,13 +9799,32 @@ function loadProgress() {
     }
 
     state.settings = normalizeSettings(parsed ? parsed.settings : null);
+    state.profile = normalizeProfile(parsed ? parsed.profile : null);
     state.guideSeen = !!(parsed && parsed.guideSeen);
+    state.gadgets = {
+        map_kit: false,
+        sundial: false,
+        radar_array: false,
+        lightning_rods: false,
+        weather_controller: false
+    };
+    state.telemetry.history = Array.isArray(parsed && parsed.telemetryHistory)
+        ? parsed.telemetryHistory.slice(0, CONFIG.TELEMETRY_HISTORY_LIMIT)
+        : [];
+    state.telemetry.session = null;
+    state.ads.busy = false;
+    state.ads.lastRewardedAt = 0;
+    state.ads.perkRerollUsed = false;
+    state.ads.gameOverBasePayout = 0;
+    state.ads.gameOverBonus = 0;
+    state.ads.gameOverRewardClaimed = false;
 
     if (parsed) {
         state.embers = Number(parsed.embers) || 0;
         state.highScore = Number(parsed.highScore) || 0;
         state.equippedSkin = parsed.equippedSkin || 'standard';
         state.selectedMode = parsed.selectedMode === 'daily' ? 'daily' : 'standard';
+        state.partyMode = parsed.partyMode === 'allies' ? 'allies' : 'solo';
         state.challengeHistory = parsed.challengeHistory && typeof parsed.challengeHistory === 'object'
             ? parsed.challengeHistory
             : {};
@@ -5904,10 +9860,26 @@ function loadProgress() {
         if (!state.inventory.skins.includes(state.equippedSkin)) {
             state.equippedSkin = 'standard';
         }
+
+        if (parsed.gadgets && typeof parsed.gadgets === 'object') {
+            CRAFTING_RECIPES.forEach((recipe) => {
+                state.gadgets[recipe.id] = !!parsed.gadgets[recipe.id];
+            });
+        }
+
+        const adSave = parsed.ads && typeof parsed.ads === 'object' ? parsed.ads : {};
+        state.ads.dailyDate = typeof adSave.dailyDate === 'string' ? adSave.dailyDate : getTodayDateId();
+        state.ads.dailyViews = Math.max(0, Math.floor(Number(adSave.dailyViews) || 0));
+        state.ads.startBonusClaims = Math.max(0, Math.floor(Number(adSave.startBonusClaims) || 0));
     } else {
         state.challengeHistory = {};
         state.nemesisProfile = normalizeNemesisProfile(null);
+        state.ads.dailyDate = getTodayDateId();
+        state.ads.dailyViews = 0;
+        state.ads.startBonusClaims = 0;
     }
+
+    ensureRewardedDailyState();
 
     ensureStarterRelic();
     if (state.equippedRelics.length === 0 && state.inventory.relics.length > 0) {
@@ -5919,6 +9891,7 @@ function loadProgress() {
     applySkin(state.equippedSkin);
     applySettingsRuntime({ save: false });
     syncSettingsUI();
+    updateRewardedOfferUI();
 }
 
 function saveProgress() {
@@ -5926,10 +9899,21 @@ function saveProgress() {
         embers: Math.floor(state.embers),
         highScore: Math.floor(state.highScore),
         selectedMode: state.selectedMode,
+        partyMode: state.partyMode,
         equippedSkin: state.equippedSkin,
         challengeHistory: state.challengeHistory,
+        profile: normalizeProfile(state.profile),
         guideSeen: !!state.guideSeen,
         settings: normalizeSettings(state.settings),
+        gadgets: { ...state.gadgets },
+        ads: {
+            dailyDate: state.ads.dailyDate,
+            dailyViews: Math.max(0, Math.floor(state.ads.dailyViews)),
+            startBonusClaims: Math.max(0, Math.floor(state.ads.startBonusClaims))
+        },
+        telemetryHistory: Array.isArray(state.telemetry.history)
+            ? state.telemetry.history.slice(0, CONFIG.TELEMETRY_HISTORY_LIMIT)
+            : [],
         nemesisProfile: state.nemesisProfile,
         inventory: {
             skins: Array.from(new Set(state.inventory.skins)),
